@@ -1,0 +1,52 @@
+# PageParse Goldfish resolution plan
+
+**Status:** Resolved in the documents  
+**Targets:** [SPEC.md](../SPEC.md) and [implementation plan](implementation-plan.md), both full files  
+**Source:** [Consolidated Goldfish review](consolidated_review_report.md)
+
+All 12 proposed edit groups were accepted and applied to the target documents. The revised plan separates deterministic tests from live model acceptance. Finding IDs and severities match the consolidated review.
+
+## 1. Define export safety and recovery
+
+### B1 · Blocker · PROPOSE FIX · Ownership and deletion boundary
+
+- **Spec edit.** Keep user-selected export destinations. Enable in-app deletion only for trusted local directories, with the explicit assumption that independent processes do not concurrently replace entries during cleanup. Explain that directory and file identity checks detect changes visible before deletion. Require a matching parent device and inode, a regular non-symlink target, matching file identity and digest, and a directory-relative final recheck. Apply the same checks to rollback and recovery. If a destination fails the trust or identity checks, report why and retain its record. Clear a missing-file record only when the original directory is accessible and the child is confirmed absent. Scope the promise to cooperative local use and reject destinations with known untrusted concurrent writers.
+- **Plan edit.** Add Stage 3 tests for a moved or replaced directory, an inaccessible directory, a symlink, a changed target, a replacement detected before the final check, and a conclusively missing child. Assert that ambiguous cases preserve the record and that unrelated files and sources survive. State the remaining check-to-unlink race under concurrent external replacement explicitly.
+- **Decision proposed.** Preserve cleanup in trusted user-selected directories. If the user needs a stronger ownership guarantee against concurrent independent writers, revise cleanup to operate only in destinations where PageParse can enforce exclusive directory mutation. [Export contract](../SPEC.md#result-and-export-contract)
+
+### B2 · Blocker · PROPOSE FIX · Publish and recover under one store lock
+
+- **Spec edit.** Require one advisory process lock per export index. All instances sharing the index use it across recovery, publication, rollback, and deletion. Acquire it in background work with a bounded timeout and a retryable busy result. Never hold it while waiting for a confirmation dialog. Define process-crash recovery as the first-release guarantee.
+- **Plan edit.** Add a Stage 3 schema sketch for an export group and its Markdown and JSON records. Include group state, one record per format, the original directory identity, planned staging and final names, per-file identities and digest, and uniqueness constraints for the group and active final paths. Commit the pending group and planned staging location before creating staging entries. Verify and record their identities before writing content, then record the completed staging digests before publishing either final. Identify any empty staging entry whose identity was never recorded as an early-crash case. Remove it only when ownership is established. Never delete an ambiguous entry by name alone. Use atomic no-clobber publication or return an actionable destination error and preserve the preview.
+- **Recovery rules.** With zero verified finals and no ambiguous entries, clean up owned staging and remove the pending group. With one verified final, retain it as an incomplete export with its real path. With two, mark the group saved. Clean up only verified staging entries. Keep inaccessible or ambiguous records available for retry or inspection. Normal publication failure may roll back a verified first file under B1. If rollback fails, index that survivor. Keep the confirmed paths fixed for a partial export. A collision requires a new confirmation before publishing under new paths.
+- **Exit checks.** Test an app starting while a second app is paused after the first publication, process exit before writing staging content and after each publication, a failed rollback, an unsupported destination, and a collision after path confirmation. Assert both filesystem contents and index state after restart. [Export contract](../SPEC.md#result-and-export-contract), [Stage 3](implementation-plan.md#implementation-stages)
+
+## 2. Define the model, render, and worker contracts
+
+| Finding | Disposition | Proposed document edit and verification |
+| --- | --- | --- |
+| M1 · Major · Helper and context budget | PROPOSE FIX | Give the configured NVIDIA helper directory explicit precedence. Put a clean client import and fixture-driven request-to-postprocessed-result check in Stage 1. Let the server validate the multimodal context. Document the message on rejection and record submitted dimensions, generation ceiling, available token usage, and result during live acceptance. A missing server leaves the live check pending. [Parse contract](../SPEC.md#parse-contract) |
+| M2 · Major · Completion and JSON | PROPOSE FIX | Define terminal success and truncation handling before calling the helper. Require complete layout blocks for nonblank responses and test a dangling token before and after a valid block. Define blank success around a verified empty-page completion shape. Keep an ambiguous empty response out of successful results until that shape is verified. Add a schema v1 example with coordinate units and order, warning fields, nullable pre-page failure location, and stable failure codes. [Parse and export contracts](../SPEC.md#parse-contract) |
+| M3 · Major · Render and session limits | PROPOSE FIX | Fit the final RGB image within 1,664 pixels wide by 2,048 pixels high with aspect ratio preserved. Keep the PDF DPI cap. Check direct-image source pixels before decoding. Add initial retained-result and chat-history bounds with visible limit errors and preservation of completed work. Test wide pages, oversized source images, and limits. Compare known small text, table cells, and region boxes against known input during live acceptance. [Parse contract](../SPEC.md#parse-contract) |
+| M4 · Major · Cancellation and GPU state | PROPOSE FIX | Make the inference slot per app instance. Define local completion of cancellation separately from backend availability. Show backend-specific recovery guidance on a corresponding error. Check local cleanup and immediate switch attempts in both directions. Record any server-side work that outlives cancellation. [Chat and terminal interaction](../SPEC.md#chat-and-terminal-interaction) |
+| M5 · Major · Discovery | PROPOSE FIX | Enable Parse for the exact configured Nemotron ID. List installed Ollama tags in Chat, choose the preferred Qwen tag when present, and surface unsupported chat tags from the server. Mirror these rules in Stage 1 and test ready, offline, missing, and unsupported states. [Goals and scope](../SPEC.md#goals-and-scope) |
+| M6 · Major · Operating limits and trust | PROPOSE FIX | Add a short risks and limits section covering where configured endpoints receive inputs, URL and credential redaction, the cleanup trust boundary, backend work after cancellation, and rendering trade-offs. Keep pending live checks in their own section. [Open verification points](../SPEC.md#open-verification-points) |
+| M8 · Major · Service and worker handoff | PROPOSE FIX | Add a small interface table to the implementation plan for model discovery, page inference, chat chunks, export outcomes, and document job events. Define renderer messages for open and metadata, render and page bytes, errors, and shutdown. The job owns the HTTP request and renderer lifecycle. Cancellation wins over late results. Require a bounded join with termination fallback and release the app slot after local cleanup. Test interruption during rendering and inference, unexpected worker exit, late results, and unresponsive worker cleanup. [Implementation stages](implementation-plan.md#implementation-stages) |
+
+## 3. Make the implementation stages independently verifiable
+
+### M7 · Major · PROPOSE FIX · Packaging and order
+
+Stage 1 builds an installable service package with a test extra and a clean-environment helper check. Move `pageparse/__main__.py` and the console entry point to Stage 4, which owns the app. List the Stage 4 modification to `pyproject.toml` for entry point and stylesheet data. Give each stage exact install and test commands and a pass condition. Stage 5 builds and installs a wheel in a fresh lightweight environment, then starts both entry points outside the checkout and verifies that the stylesheet loads. [Implementation stages](implementation-plan.md#implementation-stages)
+
+### M9 · Major · PROPOSE FIX · Acceptance assertions
+
+Use a configurable fixture endpoint for the offline-to-online journey. Assert raw table preview, usable workspace switching during inference, disabled invalid actions, and keyboard navigation at 80×24 and 120×36. After a stopped chat turn, assert that the incomplete text stays visible and both messages from that turn are absent from the next request. Verify partial-export confirmation, job status, retained pages, and omitted pages. Keep deterministic stage gates separate from a live checklist for blank-page behavior, the generation budget, known PDF content, and cancellation and GPU handoff on both backends. Record passing, failing, or unavailable for each live check. [Release acceptance](implementation-plan.md#release-acceptance)
+
+### Minor findings · PROPOSE FIX · Readability and links
+
+Explain that Chat lets a user switch to an installed text model while staying in the same terminal workspace. Remove the temporary repo inventory and replace subjective output wording with observable expectations. Repair the NVIDIA links by pointing to the actual README and named sections. Split the implementation table into stages with separate file, work, and verification lists. Distinguish the lightweight helper check from tests that need a live model. [Overview](../SPEC.md#overview-and-problem), [implementation stages](implementation-plan.md#implementation-stages)
+
+## Resolution exit
+
+The revised export contract and Stage 3 cover the B1 cleanup boundary and B2 locking and recovery outcomes. The implementation stages name the related fixture tests and exit checks. Markdown links, tables, and the schema example were checked. Application tests and live model acceptance are still pending implementation.
