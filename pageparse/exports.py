@@ -13,6 +13,7 @@ from uuid import uuid4
 from .jobs import markdown_result, pretty_json
 
 FORMATS = ("md", "json")
+SERIALIZERS = {"md": markdown_result, "json": pretty_json}
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
 SCHEMA = """
@@ -24,7 +25,8 @@ CREATE TABLE export_groups (
     parent TEXT NOT NULL,
     parent_dev INTEGER NOT NULL,
     parent_ino INTEGER NOT NULL,
-    state TEXT NOT NULL CHECK(state IN ('pending','saved','incomplete','attention required'))
+    state TEXT NOT NULL CHECK(state IN ('pending','saved','incomplete','attention required')),
+    expected_files INTEGER NOT NULL DEFAULT 2 CHECK(expected_files IN (1, 2))
 );
 CREATE TABLE export_files (
     group_id TEXT NOT NULL REFERENCES export_groups(id) ON DELETE CASCADE,
@@ -43,7 +45,15 @@ CREATE TABLE export_files (
     status TEXT NOT NULL DEFAULT 'pending',
     PRIMARY KEY (group_id, format)
 );
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
+COMMIT;
+"""
+
+MIGRATE_V1 = """
+BEGIN;
+ALTER TABLE export_groups ADD COLUMN expected_files INTEGER NOT NULL DEFAULT 2
+    CHECK(expected_files IN (1, 2));
+PRAGMA user_version = 2;
 COMMIT;
 """
 
@@ -56,8 +66,12 @@ class ExportError(Exception):
 class Proposal:
     parent: Path
     identity: tuple[int, int]
-    paths: tuple[Path, Path]
+    paths: tuple[Path, ...]
     trusted: bool
+
+    @property
+    def formats(self):
+        return tuple(path.suffix[1:] for path in self.paths)
 
 
 @dataclass(frozen=True)
@@ -184,7 +198,9 @@ class ExportStore:
                 version = db.execute("PRAGMA user_version").fetchone()[0]
                 if not version:
                     db.executescript(SCHEMA)
-                elif version != 1:
+                elif version == 1:
+                    db.executescript(MIGRATE_V1)
+                elif version != 2:
                     raise ExportError("This export index needs a compatible PageParse version.")
                 yield db
             finally:
@@ -195,24 +211,28 @@ class ExportStore:
             if lock is not None:
                 os.close(lock)
 
-    def plan(self, result, destination: Path):
+    def plan(self, result, destination: Path, formats=FORMATS):
         if not result["pages"] or result["status"] not in ("complete", "failed", "cancelled"):
             raise ExportError("Generate at least one page before exporting.")
+        requested = set(formats)
+        if not requested or not requested.issubset(FORMATS):
+            raise ExportError("Choose Markdown, JSON, or both.")
+        formats = tuple(fmt for fmt in FORMATS if fmt in requested)
         parent = Path(os.path.abspath(destination))
         try:
             with self.locked() as db, directory(parent) as fd:
-                return self.candidate(db, fd, parent, result)
+                return self.candidate(db, fd, parent, result, formats)
         except OSError:
             raise ExportError("Choose an accessible output directory without symlink components.") from None
 
-    def candidate(self, db, fd, parent, result):
+    def candidate(self, db, fd, parent, result, formats):
         stem = Path(result["source_name"]).stem
         if result["status"] != "complete":
             stem += ".partial"
         suffix = 1
         while True:
             name = stem if suffix == 1 else f"{stem}-{suffix}"
-            paths = tuple(parent / f"{name}.{fmt}" for fmt in FORMATS)
+            paths = tuple(parent / f"{name}.{fmt}" for fmt in formats)
             if all(self.available(db, fd, path) for path in paths):
                 info = os.fstat(fd)
                 return Proposal(parent, identity(info), paths, trusted_directory(info))
@@ -235,30 +255,34 @@ class ExportStore:
             with self.locked() as db, directory(proposal.parent) as fd:
                 current = os.fstat(fd)
                 if identity(current) != proposal.identity or trusted_directory(current) != proposal.trusted:
-                    return Publication("collision", proposal=self.candidate(db, fd, proposal.parent, result),
+                    return Publication("collision", proposal=self.candidate(db, fd, proposal.parent, result, proposal.formats),
                                        message="The destination changed. Review the proposed paths again.")
                 if not all(self.available(db, fd, path) for path in proposal.paths):
-                    return Publication("collision", proposal=self.candidate(db, fd, proposal.parent, result),
+                    return Publication("collision", proposal=self.candidate(db, fd, proposal.parent, result, proposal.formats),
                                        message="An output path became occupied. Review the new paths.")
-                return self.write_pair(db, fd, result, proposal)
+                return self.write_files(db, fd, result, proposal)
         except OSError:
             raise ExportError("The output directory is unavailable. Check its path and permissions.") from None
 
-    def write_pair(self, db, fd, result, proposal):
+    def write_files(self, db, fd, result, proposal):
         group_id = uuid4().hex
-        group = (group_id, time(), result["source_name"], str(proposal.parent), *proposal.identity)
-        stages = [f".pageparse-{uuid4().hex}.{fmt}.stage" for fmt in FORMATS]
+        formats = proposal.formats
+        group = (group_id, time(), result["source_name"], str(proposal.parent), *proposal.identity, len(formats))
+        stages = [f".pageparse-{uuid4().hex}.{fmt}.stage" for fmt in formats]
         with db:
-            db.execute("INSERT INTO export_groups VALUES (?,?,?,?,?,?,'pending')", group)
+            db.execute(
+                "INSERT INTO export_groups(id,created,source_name,parent,parent_dev,parent_ino,state,expected_files) "
+                "VALUES(?,?,?,?,?,?,'pending',?)", group,
+            )
             db.executemany(
                 "INSERT INTO export_files(group_id,format,staging,final,absolute_path) VALUES(?,?,?,?,?)",
                 [(group_id, fmt, stage, path.name, str(path))
-                 for fmt, stage, path in zip(FORMATS, stages, proposal.paths)],
+                 for fmt, stage, path in zip(formats, stages, proposal.paths)],
             )
 
         try:
-            for fmt, stage, serialize in zip(FORMATS, stages, (markdown_result, pretty_json)):
-                self.write_stage(db, fd, group_id, fmt, stage, serialize, result)
+            for fmt, stage in zip(formats, stages):
+                self.write_stage(db, fd, group_id, fmt, stage, SERIALIZERS[fmt], result)
             for row in self.files(db, group_id):
                 if verify(fd, row["staging"], (row["stage_dev"], row["stage_ino"]), row, stage=True) != "verified":
                     raise OSError
@@ -269,17 +293,17 @@ class ExportStore:
                         "WHERE group_id=? AND format=?", (group_id, row["format"]),
                     )
         except OSError as error:
-            # If a final appeared after the preflight, preserve it and present a fresh pair.
+            # If a final appeared after the preflight, preserve it and propose new paths.
             collision = isinstance(error, FileExistsError)
             for row in self.files(db, group_id):
                 if row["status"] == "verified":
                     verify(fd, row["final"], (row["stage_dev"], row["stage_ino"]), row, remove=True)
             state, paths, staging = self.resolve(db, fd, group_id)
             if collision and not paths and not staging:
-                return Publication("collision", proposal=self.candidate(db, fd, proposal.parent, result),
+                return Publication("collision", proposal=self.candidate(db, fd, proposal.parent, result, proposal.formats),
                                    message="An output path became occupied. Review the new paths.")
             return Publication("incomplete" if paths or staging else "error", paths, staging,
-                               message="Could not publish both files safely. Check the destination and retry.")
+                               message="Could not publish the selected files safely. Check the destination and retry.")
 
         state, paths, staging = self.resolve(db, fd, group_id)
         if state == "saved":
@@ -318,7 +342,8 @@ class ExportStore:
         if any(row["status"] != "verified" or row["stage_state"] != "resolved" for row in rows):
             state = "attention required"
         else:
-            state = "saved" if len(rows) == 2 else "incomplete"
+            expected = db.execute("SELECT expected_files FROM export_groups WHERE id=?", (group_id,)).fetchone()[0]
+            state = "saved" if len(rows) == expected else "incomplete"
         db.execute("UPDATE export_groups SET state=? WHERE id=?", (state, group_id))
         return state
 
@@ -367,7 +392,34 @@ class ExportStore:
     def list(self):
         with self.locked() as db:
             groups = db.execute("SELECT * FROM export_groups ORDER BY created DESC").fetchall()
+            for group in groups:
+                if group["state"] != "pending":
+                    self.forget_missing(db, group)
+            groups = db.execute("SELECT * FROM export_groups ORDER BY created DESC").fetchall()
             return [dict(group, files=[dict(row) for row in self.files(db, group["id"])]) for group in groups]
+
+    def forget_missing(self, db, group):
+        """Drop absent paths only after opening their original directory."""
+        missing = []
+        try:
+            with directory(Path(group["parent"])) as fd:
+                if identity(os.fstat(fd)) != (group["parent_dev"], group["parent_ino"]):
+                    return
+                for row in self.files(db, group["id"]):
+                    if row["stage_state"] != "resolved":
+                        continue
+                    try:
+                        os.stat(row["final"], dir_fd=fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        missing.append((group["id"], row["format"]))
+                    except OSError:
+                        continue
+        except OSError:
+            return
+        if missing:
+            with db:
+                db.executemany("DELETE FROM export_files WHERE group_id=? AND format=?", missing)
+                self.group_state(db, group["id"])
 
     def delete(self, requests):
         outcomes = []

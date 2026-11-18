@@ -8,11 +8,15 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DirectoryTree, Input, Markdown, ProgressBar, Select, Static, TextArea
 
+from .clipboard import read_clipboard_image
 from .config import endpoint_label
 from .documents import SUPPORTED_SUFFIXES
-from .exports import ExportError
+from .exports import FORMATS, ExportError
 from .jobs import markdown_result, pretty_json
-from .models import run_sync
+from .models import ServiceError, run_sync
+from .preview import render_preview
+
+SOURCE_HINT = "Path or Ctrl+V image"
 
 
 class SourceTree(DirectoryTree):
@@ -60,8 +64,10 @@ class ParseView(Vertical):
         self.parse_task = None
         self.result = None
         self.export_task = None
-        self.result_source = None
-        self.automatic_destination = ""
+        self.default_destination = Path.cwd() / "outputs"
+        self.clipboard_image = None
+        self.clipboard_task = None
+        self.source_revision = 0
         self.preview_revision = 0
 
     def compose(self):
@@ -70,10 +76,16 @@ class ParseView(Vertical):
             with Vertical(id="parse-controls"):
                 yield Static("Document", classes="section-title")
                 with Horizontal(classes="field-row"):
-                    yield Input(placeholder="Paste PDF or image path", id="source")
+                    yield Input(placeholder=SOURCE_HINT, id="source")
                     yield Button("Browse", id="browse")
                 yield Input(placeholder="Pages · all, or e.g. 1,3-5", id="pages")
-                yield Input(placeholder="Output directory · source folder by default", id="destination")
+                with Horizontal(classes="field-row"):
+                    yield Input(str(self.default_destination), placeholder="Output directory", id="destination")
+                    yield Select(
+                        [("Markdown + JSON", "both"), ("Markdown (.md)", "md"), ("JSON (.json)", "json")],
+                        value="both", allow_blank=False, compact=True, id="export-format",
+                        tooltip="Choose which files to save",
+                    )
                 with Horizontal(classes="buttons"):
                     yield Button("Start", id="start", variant="primary", disabled=True)
                     yield Button("Cancel", id="cancel", disabled=True)
@@ -86,7 +98,7 @@ class ParseView(Vertical):
                     yield Static("Preview", classes="section-title")
                     yield Select([("Rendered", "rendered"), ("Markdown", "markdown"), ("JSON", "json")],
                                  value="rendered", allow_blank=False, id="preview-mode")
-                yield Static("HTML tables are preserved in Markdown and JSON.", id="preview-hint", markup=False)
+                yield Static("Markdown uses pipe tables. JSON keeps the original HTML.", id="preview-hint", markup=False)
                 with VerticalScroll(id="render-scroll"):
                     yield Markdown("Parsed pages will appear here.", open_links=False, id="rendered")
                 yield TextArea("", read_only=True, soft_wrap=True, id="raw-preview")
@@ -115,7 +127,8 @@ class ParseView(Vertical):
         source = self.query_one("#source", Input)
         ready = self.status is not None and self.status.state == "ready"
         self.query_one("#start", Button).disabled = (
-            not ready or self.app.slot is not None or not source.value.strip()
+            not ready or self.app.slot is not None or self.clipboard_task is not None
+            or not (source.value.strip() or self.clipboard_image)
         )
         running = self.job is not None and self.app.slot == "parse"
         self.query_one("#cancel", Button).disabled = not running or self.job.state not in ("validating", "running")
@@ -126,12 +139,40 @@ class ParseView(Vertical):
 
     @on(Input.Changed, "#source")
     def source_changed(self, event):
-        source = self.path(event.value)
-        destination = self.query_one("#destination", Input)
-        if source and (not destination.value or destination.value == self.automatic_destination):
-            self.automatic_destination = str(source.parent)
-            destination.value = self.automatic_destination
+        self.source_revision += 1
+        if event.value:
+            self.clipboard_image = None
+            event.input.placeholder = SOURCE_HINT
         if hasattr(self.app, "exports_view"):
+            self.sync_actions()
+
+    def paste_image(self, text_input=None):
+        if self.clipboard_task is None:
+            self.clipboard_task = asyncio.create_task(self.load_clipboard(self.source_revision, text_input))
+            self.sync_actions()
+
+    async def load_clipboard(self, revision, text_input):
+        source = self.query_one("#source", Input)
+        original_value = source.value
+        try:
+            image = await read_clipboard_image()
+            if self.source_revision != revision or source.value != original_value:
+                return
+            self.clipboard_image = image
+            with self.prevent(Input.Changed):
+                source.value = ""
+            source.placeholder = f"Clipboard image · {image.width}×{image.height}"
+            self.query_one("#pages", Input).value = ""
+            self.feedback("Clipboard image ready. Press F5 to parse.")
+        except ServiceError as error:
+            if self.source_revision != revision or source.value != original_value:
+                return
+            if error.code == "clipboard_unavailable" and text_input is source and self.app.clipboard:
+                source.action_paste()
+            else:
+                self.feedback(str(error))
+        finally:
+            self.clipboard_task = None
             self.sync_actions()
 
     @staticmethod
@@ -159,12 +200,12 @@ class ParseView(Vertical):
         self.sync_actions()
         if self.query_one("#start", Button).disabled:
             return
-        source = self.path(self.query_one("#source", Input).value)
+        value = self.query_one("#source", Input).value
+        source = self.path(value) if value.strip() else self.clipboard_image
         if source is None:
             self.feedback("Enter a readable local file path.")
             return
         self.result = None
-        self.result_source = source
         self.app.sequence += 1
         self.job = self.app.job_factory(
             self.app.sequence, source, self.query_one("#pages", Input).value,
@@ -233,9 +274,7 @@ class ParseView(Vertical):
         if mode == "json":
             content = await run_sync(pretty_json, snapshot)
         elif mode == "rendered":
-            content = await run_sync(lambda: "\n\n---\n\n".join(
-                f"### Page {page['page_number']}\n\n{page['markdown']}" for page in snapshot["pages"]
-            ))
+            content = await run_sync(render_preview, snapshot["pages"])
         else:
             content = await run_sync(markdown_result, snapshot)
         if revision != self.preview_revision:
@@ -253,16 +292,23 @@ class ParseView(Vertical):
         if self.query_one("#save-export", Button).disabled:
             return
         value = self.query_one("#destination", Input).value
-        destination = self.path(value) if value.strip() else self.result_source.parent
+        destination = self.path(value) if value.strip() else self.default_destination
         if destination is None:
             self.feedback("Enter a valid output directory.")
             return
-        self.export_task = asyncio.create_task(self.publish(self.result, destination))
+        choice = self.query_one("#export-format", Select).value
+        formats = FORMATS if choice == "both" else (choice,)
+        self.export_task = asyncio.create_task(self.publish(self.result, destination, formats))
         self.sync_actions()
 
-    async def publish(self, result, destination):
+    async def publish(self, result, destination, formats):
         try:
-            proposal = await run_sync(self.app.store.plan, result, destination)
+            if destination == self.default_destination:
+                try:
+                    await run_sync(lambda: destination.mkdir(mode=0o700, exist_ok=True))
+                except OSError:
+                    raise ExportError("Could not create the default output folder. Choose a writable directory.") from None
+            proposal = await run_sync(self.app.store.plan, result, destination, formats)
             needs_confirmation = result["status"] != "complete"
             while True:
                 if needs_confirmation or not proposal.trusted:

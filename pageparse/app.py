@@ -6,7 +6,8 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Static, TabbedContent, TabPane
+from textual.theme import Theme
+from textual.widgets import Button, Footer, Input, Static, TabbedContent, TabPane
 
 from .chat_view import ChatView
 from .config import Settings
@@ -15,6 +16,30 @@ from .exports_view import ExportsView
 from .jobs import DocumentJob
 from .models import Nemotron, Ollama
 from .parse_view import ParseView
+
+
+CHARCOAL = Theme(
+    name="pageparse-charcoal",
+    background="#232221",
+    surface="#2C2A28",
+    panel="#37332F",
+    foreground="#F0E9DE",
+    primary="#E3A58D",
+    accent="#E3A58D",
+    secondary="#C6BAAA",
+    success="#B5CBA2",
+    warning="#EBC18D",
+    error="#E99590",
+    variables={
+        "text": "#F0E9DE",
+        "text-muted": "#C6BAAA",
+        "border-blurred": "#675E55",
+        "block-cursor-foreground": "#232221",
+        "button-color-foreground": "#232221",
+        "input-selection-background": "#E3A58D 30%",
+        "link-color": "#E3A58D",
+    },
+)
 
 
 class Confirm(ModalScreen[bool]):
@@ -51,22 +76,28 @@ class PageParse(App):
         Binding("f5", "primary", "Start / Send", priority=True),
         Binding("f6", "stop", "Cancel / Stop", priority=True),
         Binding("f7", "export", "Export", priority=True),
+        Binding("ctrl+v", "paste_image(True)", "Paste image", show=False, priority=True),
+        Binding("f8", "paste_image(False)", "Paste image", priority=True),
         Binding("ctrl+q", "quit", "Quit", priority=True),
     ]
 
-    def __init__(self, settings=None, *, nemotron=None, ollama=None, store=None, job_factory=DocumentJob):
+    def __init__(self, settings=None, *, nemotron=None, ollama=None, store=None,
+                 job_factory=DocumentJob, initial_workspace="parse"):
         super().__init__()
+        self.register_theme(CHARCOAL)
+        self.theme = CHARCOAL.name
         self.settings = settings or Settings.from_env()
         self.nemotron = nemotron or Nemotron(self.settings)
         self.ollama = ollama or Ollama(self.settings)
         self.store = store or ExportStore(self.settings.index)
         self.job_factory = job_factory
+        self.initial_workspace = initial_workspace
         self.slot = None
         self.sequence = 0
 
     def compose(self) -> ComposeResult:
         yield Static(" ◆  PAGEPARSE", id="masthead", markup=False)
-        with TabbedContent(initial="parse", id="workspaces"):
+        with TabbedContent(initial=self.initial_workspace, id="workspaces"):
             with TabPane("Parse", id="parse"):
                 yield ParseView(id="parse-view")
             with TabPane("Chat", id="chat"):
@@ -76,7 +107,6 @@ class PageParse(App):
         yield Footer()
 
     def on_mount(self):
-        self.theme = "textual-dark"
         self.screen.set_class(self.size.width < 100, "narrow")
         self.parse_view = self.query_one(ParseView)
         self.chat_view = self.query_one(ChatView)
@@ -100,6 +130,10 @@ class PageParse(App):
             workspaces.active = name
             target = {"parse": "#source", "chat": "#prompt", "exports": "#export-list"}[name]
             self.screen.set_focus(self.query_one(target))
+
+    @on(TabbedContent.TabActivated, "#workspaces", pane="#exports")
+    def refresh_exports_on_open(self):
+        self.exports_view.refresh_visible()
 
     def active_workspace(self):
         return self.query_one("#workspaces", TabbedContent).active
@@ -130,6 +164,16 @@ class PageParse(App):
         if not isinstance(self.screen, ModalScreen) and self.active_workspace() == "parse":
             self.parse_view.export()
 
+    def check_action(self, action, parameters):
+        if action == "paste_image":
+            if not hasattr(self, "parse_view") or isinstance(self.screen, ModalScreen) or self.active_workspace() != "parse":
+                return False
+            return not parameters[0] or not isinstance(self.focused, Input) or self.focused.id == "source"
+        return super().check_action(action, parameters)
+
+    def action_paste_image(self, use_text_fallback):
+        self.parse_view.paste_image(self.focused if use_text_fallback else None)
+
     async def confirm(self, title, text, action):
         future = asyncio.get_running_loop().create_future()
 
@@ -147,6 +191,9 @@ class PageParse(App):
                 await asyncio.sleep(0)
             self.parse_view.cancel()
             self.chat_view.stop()
+            if self.parse_view.clipboard_task:
+                self.parse_view.clipboard_task.cancel()
+                await asyncio.gather(self.parse_view.clipboard_task, return_exceptions=True)
             tasks = (self.parse_view.parse_task, self.chat_view.turn_task, self.parse_view.export_task,
                      self.exports_view.index_task, self.parse_view.discovery, self.chat_view.discovery)
             await asyncio.gather(*(task for task in tasks if task), return_exceptions=True)

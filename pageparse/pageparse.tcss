@@ -1,12 +1,12 @@
 Screen {
-    background: #101623;
-    color: #e2e9fb;
+    background: $background;
+    color: $foreground;
 }
 
 #masthead {
     height: 1;
-    background: #1b3240;
-    color: #83e1c9;
+    background: $panel;
+    color: $primary;
     text-style: bold;
 }
 
@@ -19,12 +19,8 @@ TabPane {
 }
 
 Tabs {
-    background: #172131;
-    color: #b7c4dc;
-}
-
-Footer {
-    background: #1b3240;
+    background: $surface;
+    color: $text-muted;
 }
 
 .connection {
@@ -32,13 +28,13 @@ Footer {
     min-height: 1;
     max-height: 3;
     padding: 0 1;
-    background: #202d40;
-    color: #c2d1eb;
+    background: $panel;
+    color: $text-muted;
 }
 
 .section-title {
     height: 1;
-    color: #83e1c9;
+    color: $foreground;
     text-style: bold;
 }
 
@@ -49,14 +45,14 @@ Footer {
 #parse-controls {
     padding: 1;
     width: 41%;
-    background: #151e2d;
+    background: $surface;
     overflow-y: auto;
 }
 
 #preview-panel {
     padding: 1;
     width: 1fr;
-    background: #101927;
+    background: $background;
 }
 
 #preview-toolbar, #chat-toolbar, .field-row, .buttons {
@@ -68,12 +64,17 @@ Footer {
     width: 1fr;
 }
 
+#export-format {
+    width: 19;
+    margin-left: 1;
+}
+
 #preview-mode {
     width: 20;
 }
 
 #preview-hint {
-    color: #acbdd7;
+    color: $text-muted;
     height: auto;
 }
 
@@ -82,16 +83,20 @@ Footer {
     min-height: 2;
 }
 
+#rendered MarkdownTableContent > .header, #rendered MarkdownTableContent > .cell {
+    text-overflow: fold;
+}
+
 Input, Select, TextArea, SelectionList {
-    background: #202d40;
+    background: $panel;
 }
 
 Input, SelectCurrent, TextArea {
-    border: tall #435472;
+    border: tall $border-blurred;
 }
 
 Input:focus, TextArea:focus, Select:focus SelectCurrent, SelectionList:focus {
-    border: tall #83e1c9;
+    border: tall $border;
 }
 
 .field-row Input {
@@ -109,14 +114,14 @@ Button:focus {
 
 #parse-progress {
     height: 1;
-    color: #83e1c9;
+    color: $primary;
 }
 
 #parse-feedback, #chat-feedback, #delete-feedback {
     height: auto;
     max-height: 4;
     overflow-y: auto;
-    color: #eac88d;
+    color: $warning;
 }
 
 #chat-toolbar .section-title {
@@ -137,7 +142,7 @@ Button:focus {
 }
 
 #export-list {
-    border: tall #435472;
+    border: tall $border-blurred;
 }
 
 ModalScreen {
@@ -146,8 +151,8 @@ ModalScreen {
 }
 
 .dialog {
-    background: #1d293c;
-    border: solid #6db9ab;
+    background: $surface;
+    border: solid $border;
     padding: 0 1;
     width: 85%;
     max-width: 94;
@@ -156,7 +161,7 @@ ModalScreen {
 
 .dialog-title {
     height: 1;
-    color: #83e1c9;
+    color: $primary;
     text-style: bold;
 }
 
@@ -194,7 +199,8 @@ ModalScreen {
 }
 
 .narrow #parse-controls Input:focus {
-    background: #354862;
+    border-left: solid $border;
+    background: $surface-active;
 }
 
 .narrow #parse-controls Button, .narrow #parse-controls Button:focus {

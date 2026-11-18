@@ -15,7 +15,12 @@ from pageparse.models import Nemotron, Ollama
 from pageparse.parse_view import ChooseSource, SourceTree
 
 RAW = r"<x_0.1><y_0.2>Table<x_0.7><y_0.3><class_Table>"
-TABLE = "<table><tr><td>Revenue</td><td>42</td></tr></table>"
+TABLE = (
+    '<table><tr><th rowspan="2">Block accessed</th><th rowspan="2">Hit or miss</th>'
+    '<th colspan="2">Set 0</th><th colspan="2">Set 1</th></tr>'
+    '<tr><th>Cache line 0</th><th>Cache line 1</th><th>Cache line 0</th><th>Cache line 1</th></tr>'
+    '<tr><td>8</td><td>Miss</td><td>Block 0</td><td>Block 8</td><td>???</td><td>???</td></tr></table>'
+)
 
 
 def helper(raw, *, image_size):
@@ -121,6 +126,7 @@ def pdf_fixture(path):
 @pytest.mark.parametrize("viewport", [(80, 24), (120, 36)])
 def test_file_picker_ordered_preview_export_and_delete(tmp_path, monkeypatch, viewport):
     monkeypatch.chdir(tmp_path)
+    output = tmp_path / "outputs"
     source = tmp_path / "incoming.pdf"
     pdf_fixture(source)
     app = FixtureServices().app(tmp_path)
@@ -129,6 +135,7 @@ def test_file_picker_ordered_preview_export_and_delete(tmp_path, monkeypatch, vi
         async with app.run_test(size=viewport) as pilot:
             await ready(app)
             assert app.active_workspace() == "parse"
+            assert app.query_one("#destination", Input).value == str(output)
             controls = app.query_one("#parse-controls").region
             preview = app.query_one("#preview-panel").region
             if viewport[0] == 80:
@@ -154,17 +161,34 @@ def test_file_picker_ordered_preview_export_and_delete(tmp_path, monkeypatch, vi
             assert list(tmp_path.glob("*.md")) == []
             assert list(tmp_path.glob("*.json")) == []
             assert list(tmp_path.glob("*.png")) == []
+            assert not output.exists()
+            rendered = app.query_one("#rendered")
+            await until(lambda: len(rendered.query("MarkdownTableContent .header")) == 12
+                        and len(rendered.query("MarkdownTableContent .row1")) == 12)
+            rendered_table = rendered.query("MarkdownTableContent").first()
+            assert [str(cell.render()) for cell in rendered_table.query(".header")] == [
+                "Block accessed", "Hit or miss", "Set 0 / Cache line 0", "Set 0 / Cache line 1",
+                "Set 1 / Cache line 0", "Set 1 / Cache line 1",
+            ]
+            assert [str(cell.render()) for cell in rendered_table.query(".row1")] == [
+                "8", "Miss", "Block 0", "Block 8", "???", "???",
+            ]
             app.query_one("#preview-mode", Select).value = "markdown"
-            await until(lambda: TABLE in app.query_one("#raw-preview", TextArea).text)
+            raw = app.query_one("#raw-preview", TextArea)
+            await until(lambda: "| Block accessed | Hit or miss | Set 0 / Cache line 0 |" in raw.text)
+            markdown = raw.text
+            assert "<table" not in markdown
+            assert "| 8 | Miss | Block 0 | Block 8 | ??? | ??? |" in markdown
             app.query_one("#preview-mode", Select).value = "json"
             await until(lambda: '"schema_version": 1' in app.query_one("#raw-preview", TextArea).text)
 
             await pilot.press("f7")
-            await until(lambda: (tmp_path / "incoming.json").exists() and bool(app.exports_view.groups))
-            export = json.loads((tmp_path / "incoming.json").read_text())
+            await until(lambda: (output / "incoming.json").exists() and bool(app.exports_view.groups))
+            export = json.loads((output / "incoming.json").read_text())
             assert export["status"] == "complete"
             assert [page["page_number"] for page in export["pages"]] == [2, 3]
-            assert TABLE in (tmp_path / "incoming.md").read_text()
+            assert export["pages"][0]["markdown"] == TABLE
+            assert (output / "incoming.md").read_text() == markdown
 
             await pilot.press("f3")
             await until(lambda: app.active_workspace() == "exports")
@@ -173,16 +197,16 @@ def test_file_picker_ordered_preview_export_and_delete(tmp_path, monkeypatch, vi
             await until(lambda: not pilot.app.query_one("#delete-md", Button).disabled)
             await pilot.click("#delete-md")
             await until(lambda: isinstance(app.screen, Confirm))
-            assert str(tmp_path / "incoming.md") in app.screen.text
+            assert str(output / "incoming.md") in app.screen.text
             assert "known bytes" in app.screen.text
             await pilot.press("escape")
-            assert (tmp_path / "incoming.md").exists()
+            assert (output / "incoming.md").exists()
             await until(lambda: app.exports_view.index_task is None)
             await pilot.click("#delete-md")
             await until(lambda: isinstance(app.screen, Confirm))
             await pilot.click("#confirm")
-            await until(lambda: not (tmp_path / "incoming.md").exists())
-            assert (tmp_path / "incoming.json").exists() and source.exists()
+            await until(lambda: not (output / "incoming.md").exists())
+            assert (output / "incoming.json").exists() and source.exists()
             await until(lambda: app.exports_view.index_task is None)
 
     asyncio.run(verify())
@@ -199,10 +223,13 @@ def test_cancel_parse_confirm_partial_and_reopen_offline(tmp_path, viewport):
     async def verify():
         async with app.run_test(size=viewport) as pilot:
             await ready(app)
+            destination = app.query_one("#destination", Input)
+            destination.value = str(tmp_path)
             app.query_one("#source", Input).value = str(source)
             await pilot.press("f5")
             await asyncio.wait_for(services.parse_waiting.wait(), 5)
             assert services.sizes == [(150, 300), (300, 300)]
+            assert destination.value == str(tmp_path)
             assert app.query_one("#start", Button).disabled
             assert app.query_one("#save-export", Button).disabled
             await pilot.press("f2")
@@ -348,5 +375,91 @@ def test_chat_cap_keeps_only_complete_utf8(tmp_path, monkeypatch):
             assert turn.state == "failed · incomplete"
             assert turn.reply == "visibl"
             assert app.chat_view.retained == 9
+
+    asyncio.run(verify())
+
+
+def test_paste_image_into_parse_and_export(tmp_path, monkeypatch):
+    from pageparse.documents import normalize_image
+
+    monkeypatch.chdir(tmp_path)
+    png = BytesIO()
+    Image.new("RGBA", (56, 72), (0, 0, 0, 0)).save(png, "PNG")
+
+    async def clipboard():
+        return normalize_image(png.getvalue())
+
+    monkeypatch.setattr("pageparse.parse_view.read_clipboard_image", clipboard)
+    services = FixtureServices()
+    app = services.app(tmp_path)
+
+    async def verify():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await ready(app)
+            await pilot.press("f1")
+            source = app.query_one("#source", Input)
+            source.value = str(tmp_path / "old.pdf")
+            app.query_one("#pages", Input).value = "3"
+            await pilot.pause()
+            await pilot.press("ctrl+v")
+            await until(lambda: app.parse_view.clipboard_image is not None)
+            assert source.value == ""
+            assert "56×72" in source.placeholder
+            assert app.query_one("#pages", Input).value == ""
+            await pilot.press("f5")
+            await until(lambda: app.parse_view.result is not None)
+            assert services.sizes == [(56, 72)]
+            assert not list(tmp_path.glob("*.png"))
+            destination = app.query_one("#destination", Input)
+            assert destination.value == str(tmp_path / "outputs")
+            destination.value = ""
+            await pilot.press("f7")
+            output = tmp_path / "outputs" / "clipboard-image.json"
+            await until(lambda: output.is_file() and app.parse_view.export_task is None)
+            result = json.loads(output.read_text())
+            assert result["source_type"] == "image"
+            assert result["source_name"] == "clipboard-image.png"
+            assert output.with_suffix(".md").is_file()
+
+            source.value = str(tmp_path / "another.pdf")
+            await until(lambda: app.parse_view.clipboard_image is None)
+            await pilot.press("f8")
+            await until(lambda: app.parse_view.clipboard_image is not None)
+            assert source.value == ""
+
+    asyncio.run(verify())
+
+
+@pytest.mark.parametrize("fmt,keys", [("md", ["down"]), ("json", ["down", "down"])])
+def test_single_export_and_auto_refresh_after_external_deletion(tmp_path, monkeypatch, fmt, keys):
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "sample.png"
+    Image.new("RGB", (80, 60), "white").save(source)
+    output = tmp_path / "outputs"
+    app = FixtureServices().app(tmp_path)
+
+    async def verify():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await ready(app)
+            app.query_one("#source", Input).value = str(source)
+            await pilot.press("f5")
+            await until(lambda: app.parse_view.result is not None)
+            selector = app.query_one("#export-format", Select)
+            selector.focus()
+            await pilot.press("enter", *keys, "enter")
+            assert selector.value == fmt
+            await pilot.press("f7")
+            await until(lambda: bool(app.exports_view.groups) and app.parse_view.export_task is None)
+            saved = output / f"sample.{fmt}"
+            assert list(output.iterdir()) == [saved]
+
+            await pilot.press("f3")
+            await until(lambda: app.active_workspace() == "exports")
+            group, = app.exports_view.groups.values()
+            assert group["state"] == "saved"
+            saved.unlink()
+            await until(lambda: not app.exports_view.groups)
+            assert "No exports saved yet." in str(app.query_one("#index-status", Static).render())
+            assert source.exists()
 
     asyncio.run(verify())

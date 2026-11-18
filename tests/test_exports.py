@@ -44,7 +44,8 @@ def test_restart_partial_and_format_specific_deletion(setup):
     markdown, structured = saved.paths
     assert markdown.name == "report.partial.md"
     assert markdown.read_text().startswith("> Partial result")
-    assert "<table>" in markdown.read_text()
+    assert "| A |" in markdown.read_text()
+    assert "<table>" not in markdown.read_text()
     assert json.loads(structured.read_text()) == result("cancelled")
 
     reopened = ExportStore(store.index)
@@ -53,7 +54,7 @@ def test_restart_partial_and_format_specific_deletion(setup):
     assert group["state"] == "saved"
     assert len(group["files"]) == 2
     with sqlite3.connect(store.index) as db:
-        assert db.execute("PRAGMA user_version").fetchone() == (1,)
+        assert db.execute("PRAGMA user_version").fetchone() == (2,)
         assert db.execute("SELECT size FROM export_files WHERE format='md'").fetchone() == (markdown.stat().st_size,)
     assert reopened.delete([]) == []
     assert markdown.exists()
@@ -298,3 +299,46 @@ def test_index_unavailable(tmp_path):
     parent.touch()
     with pytest.raises(ExportError, match="index is unavailable"):
         ExportStore(parent / "exports.sqlite3").recover()
+
+
+@pytest.mark.parametrize("fmt,other", [("md", "json"), ("json", "md")])
+def test_single_format_only_claims_its_own_path(setup, fmt, other):
+    store, dest = setup
+    (dest / f"report.{other}").write_text("unrelated")
+    doc = result()
+    proposal = store.plan(doc, dest, (fmt,))
+    target = dest / f"report.{fmt}"
+    assert proposal.paths == (target,)
+    target.write_text("occupied")
+    publication = store.publish(doc, proposal)
+    assert publication.status == "collision"
+    assert publication.proposal.paths == (dest / f"report-2.{fmt}",)
+    saved = store.publish(doc, publication.proposal)
+    assert saved.status == "saved"
+    reopened = ExportStore(store.index)
+    reopened.recover()
+    group, = reopened.list()
+    assert group["state"] == "saved"
+    assert group["expected_files"] == 1
+    assert [row["format"] for row in group["files"]] == [fmt]
+    saved.paths[0].unlink()
+    assert reopened.list() == []
+    assert (dest / f"report.{other}").read_text() == "unrelated"
+    assert target.read_text() == "occupied"
+
+
+def test_legacy_pair_migrates_and_external_deletion_updates_list(setup):
+    store, dest = setup
+    markdown, structured = save(store, dest).paths
+    with sqlite3.connect(store.index) as db:
+        db.execute("ALTER TABLE export_groups DROP COLUMN expected_files")
+        db.execute("PRAGMA user_version = 1")
+
+    reopened = ExportStore(store.index)
+    markdown.unlink()
+    group, = reopened.list()
+    assert group["expected_files"] == 2
+    assert group["state"] == "incomplete"
+    assert [row["absolute_path"] for row in group["files"]] == [str(structured)]
+    assert reopened.delete([(group["id"], "json")])[0].status == "deleted"
+    assert reopened.list() == []

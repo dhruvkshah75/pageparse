@@ -5,6 +5,7 @@ from pathlib import Path
 from rich.text import Text
 from textual import on
 from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
 from textual.widgets import Button, SelectionList, Static
 
 from .exports import ExportError
@@ -27,13 +28,21 @@ class ExportsView(Vertical):
             yield Button("Delete JSON", id="delete-json", disabled=True)
             yield Button("Delete both", id="delete-both", variant="error", disabled=True)
 
-    def refresh_index(self):
-        if not self.index_task:
-            self.index_task = asyncio.create_task(self.recover())
+    def on_mount(self):
+        self.set_interval(2, self.refresh_visible)
 
-    async def recover(self):
+    def refresh_visible(self):
+        if not isinstance(self.app.screen, ModalScreen) and self.app.active_workspace() == "exports":
+            self.refresh_index(recover=False)
+
+    def refresh_index(self, *, recover=True):
+        if not self.index_task:
+            self.index_task = asyncio.create_task(self.refresh_groups(recover))
+
+    async def refresh_groups(self, recover):
         try:
-            await run_sync(self.app.store.recover)
+            if recover:
+                await run_sync(self.app.store.recover)
             await self.load_groups()
         except ExportError as error:
             self.available = False
@@ -45,14 +54,17 @@ class ExportsView(Vertical):
 
     async def load_groups(self):
         groups = await run_sync(self.app.store.list)
-        self.groups = {group["id"]: group for group in groups}
+        indexed_groups = {group["id"]: group for group in groups}
+        if self.available and indexed_groups == self.groups:
+            return
+        self.groups = indexed_groups
         selection = self.query_one("#export-list", SelectionList)
         previous = set(selection.selected)
         highlight = selection.highlighted
         selection.clear_options()
         for group in groups:
             option = Text(group["source_name"], style="bold")
-            option.append("  ·  " + group["state"], style="#a7b5d0")
+            option.append("  ·  " + group["state"], style="italic")
             for file in group["files"]:
                 size = f"  ·  {file['size']:,} B" if file["size"] is not None else ""
                 option.append(f"\n{file['absolute_path']}{size}  ·  {file['status']}")

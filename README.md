@@ -10,12 +10,29 @@ From the repository root, create a lightweight Python 3.12 environment and insta
 python3.12 -m venv .venv
 . .venv/bin/activate
 python -m pip install .
-pageparse
+./run-pageparse
 ```
 
-PageParse connects to separately managed model servers. Keep vLLM, GPU libraries, and model weights in the server environment. `python -m pageparse` opens the same workspace. Launch from the folder you want the file picker to open in.
+Keep vLLM, GPU libraries, and model weights in the server environment.
 
-## Model servers
+## Start PageParse and its servers together
+
+Run the launcher from the repository root.
+
+```sh
+./run-pageparse          # Nemotron, then open Parse
+./run-pageparse --image  # Same as the default
+./run-pageparse --chat   # Ollama, then open Chat
+./run-pageparse --both   # Nemotron and Ollama, then open Parse
+```
+
+The launcher starts the selected local servers in the background and opens the TUI when their APIs are ready. It reuses servers that are already running. **Ctrl+Q** quits the TUI and stops the servers started by this launch. Startup logs go under `$XDG_STATE_HOME/pageparse/logs/` or `~/.local/state/pageparse/logs/`.
+
+The launcher uses the existing installation in `/opt/nemotron` and the `ollama` command on your PATH. Ollama uses your existing models. You can set `OLLAMA_MODELS` to choose their directory. On a 4 GB GPU, `--both` can leave less GPU memory for Ollama, which may run some work on the CPU.
+
+Use `pageparse` or `python -m pageparse` when you already manage the services yourself. Those entry points open the TUI from the current directory.
+
+## Manually managed servers
 
 Press **F4** to refresh discovery after starting a service.
 
@@ -44,9 +61,13 @@ curl -fsS http://localhost:11434/api/tags
 
 ## Documents and exports
 
+Copy an image or screenshot to your desktop clipboard and press **Ctrl+V** in Parse. If your terminal intercepts Ctrl+V, press **F8**. The source field shows the image dimensions when it is ready. Press **F5** to parse, then **F7** to export. Clipboard images stay in memory.
+
+On Linux, the app can read images through the system GTK 4 bindings, `wl-paste` on Wayland, or `xclip` on X11. If your Wayland session blocks the GTK clipboard reader, install `wl-clipboard` with your distribution's package manager.
+
 - Parse accepts scanned and text PDFs, PNG, JPEG, and WebP. Leave the PDF page range blank for all pages or enter a one-based selection such as `1,3-5`. A single CPU worker renders selected PDF pages in order, one page at a time.
-- Preview results in Rendered, Markdown, or JSON before saving. Use Markdown to inspect preserved HTML table markup. Export writes a Markdown and JSON pair to the source folder by default. Partial exports retain completed pages, require confirmation, and use a `.partial` filename. The JSON includes original page numbers, image dimensions, and normalized and pixel bounding boxes.
-- The export index tracks generated files across sessions. Press Space to select export groups and choose whether to remove Markdown, JSON, or both. Confirm the exact paths before permanent deletion. It checks file identity and content and skips changed files and directories outside its cleanup boundary. For app-managed cleanup, use a directory you own that is writable only by you.
+- Preview results in Rendered, Markdown, or JSON before saving. Rendered displays tables, and the Markdown tab and exported .md file use Markdown pipe tables. Merged headers become per-column labels. JSON preserves the original HTML, including exact row and column spans. Use the format menu beside the output directory to save Markdown, JSON, or both. Export defaults to both and saves to `outputs/` under the directory where you launched PageParse. Edit the Output directory field to choose another folder. PageParse creates the default directory if it is missing. Partial exports retain completed pages, require confirmation, and use a `.partial` filename. The JSON includes original page numbers, image dimensions, and normalized and pixel bounding boxes.
+- The export index tracks generated files across sessions. The Exports tab updates when you open it and checks for externally deleted files while it is visible. Press Space to select export groups and choose whether to remove Markdown, JSON, or both. Confirm the exact paths before permanent deletion. It checks file identity and content and skips changed files and directories outside its cleanup boundary. For app-managed cleanup, use a directory you own that is writable only by you. If an existing `outputs/` directory is group-writable, run `chmod go-w outputs` from the repository root.
 
 ## Use the terminal workspaces
 
@@ -59,6 +80,7 @@ curl -fsS http://localhost:11434/api/tags
 | **F5** | Start parsing or send the current chat message |
 | **F6** | Cancel the active parse or stop the active chat |
 | **F7** | Export the current result from Parse |
+| **Ctrl+V** or **F8** | Paste a clipboard image in Parse |
 | **Ctrl+Q** | Quit |
 
 - **Chat.** Use the multiline composer, then Send. Stop keeps streamed text visible as incomplete. Subsequent requests include completed turns. Use New chat to clear the transcript.

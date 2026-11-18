@@ -65,12 +65,14 @@ def select_pages(spec: str, count: int):
     return sorted(pages)
 
 
-def normalize_image(path: Path):
+def normalize_image(source_data: Path | bytes):
     try:
-        with Image.open(path, formats=sorted(IMAGE_FORMATS)) as source:
-            expected = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
-            if expected.get(path.suffix.lower()) != source.format:
-                raise ValueError
+        input_data = BytesIO(source_data) if isinstance(source_data, bytes) else source_data
+        with Image.open(input_data, formats=sorted(IMAGE_FORMATS)) as source:
+            if isinstance(source_data, Path):
+                expected = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
+                if expected.get(source_data.suffix.lower()) != source.format:
+                    raise ValueError
             if source.width * source.height > MAX_SOURCE_PIXELS:
                 raise ServiceError("source_limit", "This image exceeds 40 million pixels. Resize it and retry.")
             if getattr(source, "is_animated", False):

@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+python="$root/.venv/bin/python"
+if [ ! -x "$python" ]; then
+    printf '%s\n' 'PageParse needs its .venv. Run the setup commands in README.md first.' >&2
+    exit 1
+fi
+
+cd "$root"
+exec "$python" -m pageparse.launcher "$@"

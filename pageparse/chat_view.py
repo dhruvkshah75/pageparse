@@ -191,10 +191,10 @@ class ChatView(Vertical):
     def refresh_transcript(self):
         text = Text()
         for turn in self.turns:
-            text.append("You\n", style="bold #65cdb6")
+            text.append("You\n", style="bold")
             text.append(turn.prompt + "\n\n")
             heading = "Assistant" if turn.state == "complete" else f"Assistant · {turn.state}"
-            text.append(heading + "\n", style="bold #adc0ff")
+            text.append(heading + "\n", style="bold")
             text.append(turn.reply + "\n\n")
         self.query_one("#transcript", Static).update(text or Text("Send a message to begin."))
         self.query_one("#chat-scroll").scroll_end(animate=False)

@@ -5,8 +5,9 @@ import json
 from pathlib import Path
 from time import monotonic
 
-from .documents import PdfRenderer, normalize_image, select_pages, source_type
+from .documents import PageImage, PdfRenderer, normalize_image, select_pages, source_type
 from .models import ServiceError, run_sync
+from .preview import render_tables
 
 MAX_RESULT_BYTES = 32 * 1024 * 1024
 
@@ -26,7 +27,7 @@ def pretty_json(result):
 
 
 def markdown_result(result):
-    sections = [f"<!-- Page {page['page_number']} -->\n\n{page['markdown'].rstrip()}"
+    sections = [f"<!-- Page {page['page_number']} -->\n\n{render_tables(page['markdown']).rstrip()}"
                 for page in result["pages"]]
     markdown = "\n\n---\n\n".join(sections)
     if result["status"] != "complete":
@@ -36,7 +37,7 @@ def markdown_result(result):
 
 
 class DocumentJob:
-    def __init__(self, job_id, source: Path, pages, model, adapter, *,
+    def __init__(self, job_id, source: Path | PageImage, pages, model, adapter, *,
                  report=lambda progress: None, renderer_factory=PdfRenderer,
                  result_budget=MAX_RESULT_BYTES):
         self.job_id = job_id
@@ -53,9 +54,10 @@ class DocumentJob:
         self.active_page = None
         self.started = monotonic()
         self.ended = None
+        is_path = isinstance(source, Path)
         self.result = {
-            "schema_version": 1, "source_name": source.name,
-            "source_type": "pdf" if source.suffix.lower() == ".pdf" else "image",
+            "schema_version": 1, "source_name": source.name if is_path else "clipboard-image.png",
+            "source_type": "pdf" if is_path and source.suffix.lower() == ".pdf" else "image",
             "model": model, "status": None, "selected_pages": [],
             "pages": [], "failure": None,
         }
@@ -100,8 +102,11 @@ class DocumentJob:
         return self.result
 
     async def process(self):
-        kind = await run_sync(source_type, self.source)
-        if kind == "pdf":
+        if isinstance(self.source, PageImage):
+            direct_image = self.source
+            self.source = None
+            count = 1
+        elif await run_sync(source_type, self.source) == "pdf":
             self.renderer = self.renderer_factory()
             count = await self.renderer.open(self.source)
             direct_image = None

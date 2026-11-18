@@ -166,6 +166,7 @@ async def main(root):
                 block = next(block for block in page["blocks"] if "Quarterly report" in block["text"])
                 assert all(abs(actual - expected) <= 12 for actual, expected in zip(block["bbox_pixels"], expected_box))
                 print("Region", block["bbox_pixels"], "reference", expected_box, flush=True)
+                app.query_one("#destination", Input).value = str(root)
                 await pilot.press("f7")
                 await until(lambda: (root / "report.md").is_file() and (root / "report.json").is_file())
 
