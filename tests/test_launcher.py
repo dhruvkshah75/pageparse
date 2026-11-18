@@ -62,23 +62,29 @@ def test_startup_lock_and_remote_launch_boundary(tmp_path):
         remote.local_command()
 
 
-@pytest.mark.parametrize(("args", "servers", "workspace"), [
-    ([], ["Nemotron"], "parse"),
-    (["--image"], ["Nemotron"], "parse"),
-    (["--chat"], ["Ollama"], "chat"),
-    (["--both"], ["Nemotron", "Ollama"], "parse"),
+@pytest.mark.parametrize(("mode", "servers"), [
+    ("image", ["Nemotron"]), ("chat", ["Ollama"]), ("both", ["Nemotron", "Ollama"]), ("manual", []),
 ])
-def test_launch_flags(tmp_path, monkeypatch, args, servers, workspace):
+def test_launch_modes(tmp_path, monkeypatch, mode, servers):
+    from pageparse import tui_backend
+
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     calls = []
     ensure = AsyncMock(side_effect=lambda server, *rest: calls.append(server.name))
     monkeypatch.setattr(launcher, "ensure_server", ensure)
-    app = mock_app(monkeypatch, calls)
-    assert launcher.main(args) == 0
-    assert calls == ["display", *servers]
-    assert list(app.call_args.kwargs["starting_backends"]) == servers
-    assert app.call_args.kwargs["initial_workspace"] == workspace
-    app.return_value.run.assert_called_once()
+
+    async def run():
+        session = tui_backend.BackendSession(tui_backend.Settings.from_env(), mode, lambda *a, **kw: None)
+        try:
+            session.begin()
+            assert session.starting == set(servers)
+            if task := session.tasks.get("startup"):
+                await task
+            assert calls == servers
+        finally:
+            await session.close()
+
+    asyncio.run(run())
 
 
 def test_custom_nemotron_root_controls_runtime_and_helper(tmp_path, monkeypatch):
@@ -106,11 +112,20 @@ def test_reused_nemotron_stops_after_app_quits(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     calls = []
     monkeypatch.setattr(launcher, "ensure_server", AsyncMock(return_value=42))
-    monkeypatch.setattr(launcher, "stop_reused_nemotron", lambda fd: calls.append(("stop", fd)))
-    mock_app(monkeypatch, calls)
+    from pageparse import tui_backend
 
-    assert launcher.main(["--image"]) == 0
-    assert calls == ["display", ("stop", 42)]
+    monkeypatch.setattr(tui_backend, "stop_reused_nemotron", lambda fd: calls.append(("stop", fd)))
+
+    async def run():
+        session = tui_backend.BackendSession(tui_backend.Settings.from_env(), "image", lambda *a, **kw: None)
+        try:
+            session.begin()
+            await session.tasks["startup"]
+        finally:
+            await session.close()
+
+    asyncio.run(run())
+    assert calls == [("stop", 42)]
 
 
 def test_remote_and_ollama_listeners_are_not_adopted(monkeypatch):
@@ -121,19 +136,3 @@ def test_remote_and_ollama_listeners_are_not_adopted(monkeypatch):
                                             "/models", "nemotron-parse")) is None
     assert launcher.nemotron_listener(Server("Ollama", "http://localhost:11434", "", "/api/tags")) is None
     lookup.assert_not_called()
-
-
-def mock_app(monkeypatch, calls):
-    app = MagicMock()
-    monkeypatch.setattr("pageparse.app.PageParse", app)
-
-    def run(*, auto_pilot):
-        async def display():
-            calls.append("display")
-            await auto_pilot(MagicMock(pause=AsyncMock()))
-            await app.return_value.startup_task
-
-        asyncio.run(display())
-
-    app.return_value.run.side_effect = run
-    return app

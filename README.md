@@ -4,7 +4,7 @@ PageParse is a Linux terminal app for parsing PDFs and images with NVIDIA Nemotr
 
 ## Install and run
 
-Install Git, curl, and Python 3.12 with virtual environment support. On Ubuntu, the virtual environment support is packaged as `python3.12-venv`.
+Install Git, curl, Go 1.25.8 or later, and Python 3.12 with virtual environment support. On Ubuntu, the virtual environment support is packaged as `python3.12-venv`.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dhruvkshah75/pageparse/main/install-pageparse.sh -o install-pageparse.sh
@@ -13,7 +13,7 @@ cd pageparse
 ./run-pageparse --help
 ```
 
-The installer clones into `./pageparse` and installs the client dependencies in `.venv`. Pass a directory to use a different location, for example `sh install-pageparse.sh ~/tools/pageparse`. It leaves existing destinations in place. Set `PAGEPARSE_REPO_URL` to install from a fork.
+The installer clones into `./pageparse`, installs the Python backend dependencies in `.venv`, and builds the Go TUI. Subsequent launches reuse the binary until the Go sources or dependencies change. Pass a directory to use a different location, for example `sh install-pageparse.sh ~/tools/pageparse`. It leaves existing destinations in place. Set `PAGEPARSE_REPO_URL` to install from a fork.
 
 Set up the backend you plan to use once, then run the matching command from the checkout.
 
@@ -66,6 +66,8 @@ The launcher binds local vLLM to loopback with one active sequence, an 8,744-tok
 
 ## Use PageParse
 
+The TUI uses a warm charcoal palette with coral controls and cream text.
+
 | Key | Action |
 | --- | --- |
 | **F1** | Parse |
@@ -75,10 +77,18 @@ The launcher binds local vLLM to loopback with one active sequence, an 8,744-tok
 | **F5** | Parse the current source or send a chat message |
 | **F6** | Cancel the active parse or stop the chat reply |
 | **F7** | Export the current parse result |
-| **Ctrl+V** or **F8** | Paste an image into Parse |
+| **F8** | Paste an image into Parse |
+| **F9** | Copy the current preview, chat transcript, or export details |
+| **F10** | Open the full status message or export paths |
+| **Ctrl+C** | Copy the focused input or workspace text |
+| **Tab / Shift+Tab** | Move focus between fields, buttons, and output |
+| **Enter / ↑ / ↓** | Open a focused dropdown, then move between choices |
+| **Enter / Esc** | Select a choice or close the menu |
 | **Ctrl+Q** | Quit |
 
-**Parse.** Browse or paste a path to a text or scanned PDF, PNG, JPEG, or WebP. Use a page range such as `1,3-5` or leave it empty for all pages. For clipboard images, use **F8** if your terminal captures Ctrl+V. On Wayland, install `wl-clipboard` if your desktop blocks the clipboard reader.
+**Parse.** Browse or paste a path to a text or scanned PDF, PNG, JPEG, or WebP. Enter `all`, leave Pages blank, or enter a range such as `1,3-5`. Press **F8** to paste an image. On Wayland, install `wl-clipboard` if your desktop blocks the clipboard reader.
+
+**Copy.** **F9** copies the full output, including off-screen text. In Rendered mode it copies the underlying Markdown. Move focus into a preview or transcript to scroll with **↑/↓** or **Page Up/Page Down**. Copy uses `wl-copy` on Wayland, `xclip` on X11, or OSC 52 when the terminal supports it. To select a portion of visible text, hold **Shift** while dragging in terminals that support bypassing app mouse handling.
 
 **Export.** Choose Markdown, JSON, or both beside the output directory. The default destination is `outputs/` in the launch directory. Markdown uses pipe tables, and JSON preserves the original table spans and pixel coordinates. Partial results require confirmation and use `.partial` filenames. The app never overwrites an existing path.
 
@@ -99,7 +109,7 @@ The launcher binds local vLLM to loopback with one active sequence, an 8,744-tok
 | `PAGEPARSE_NEMOTRON_MAX_TOKENS` | `4096` | Maximum generation tokens per page |
 | `XDG_STATE_HOME` | `~/.local/state` | Base directory for the export index and server logs |
 
-The configured endpoints receive page images and chat prompts for their workspaces. To manage servers yourself, use `.venv/bin/pageparse` or `.venv/bin/python -m pageparse` to open the TUI directly.
+The configured endpoints receive page images and chat prompts for their workspaces. To manage servers yourself, use `./run-pageparse --no-start`, `.venv/bin/pageparse`, or `.venv/bin/python -m pageparse`. Add `--chat` to open Chat first.
 
 ## Troubleshooting
 
@@ -119,11 +129,12 @@ From a Git checkout:
 ```sh
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -e '.[test]'
+go test ./...
 .venv/bin/python -m pytest -q
 ./run-pageparse --chat
 ```
 
-- `run-pageparse` delegates to `pageparse/launcher.py` for service startup, then opens the Textual app in `pageparse/app.py`.
-- Parse and Chat talk to the model adapters in `pageparse/models.py`. Export persistence and cleanup live in `pageparse/exports.py`.
+- `cmd/pageparse` contains the Go TUI, built with Bubble Tea, Bubbles, Lip Gloss, and Glamour.
+- The private bridge in `pageparse/tui_backend.py` connects the TUI to the existing PDF renderer, model adapters, service launcher, and SQLite export store.
 - The deterministic suite uses fixtures and runs without model servers. With both servers running, `.venv/bin/python tests/live_smoke.py` exercises the real backends with generated inputs.
 - Keep GPU packages in the separate Nemotron environment. See the [specification](SPEC.md), [implementation plan](docs/implementation-plan.md), and [verification results](docs/checkpoints.md) for behavior and test coverage.

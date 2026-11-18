@@ -2,11 +2,23 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-python="$root/.venv/bin/python"
+python=${PAGEPARSE_PYTHON:-"$root/.venv/bin/python"}
 if [ ! -x "$python" ]; then
     printf '%s\n' 'PageParse needs its .venv. Run the setup commands in README.md first.' >&2
     exit 1
 fi
 
+binary="$root/build/pageparse"
+if [ ! -x "$binary" ] || [ "$root/go.mod" -nt "$binary" ] || [ "$root/go.sum" -nt "$binary" ] ||
+    [ -n "$(find "$root/cmd/pageparse" -name '*.go' ! -name '*_test.go' -newer "$binary" -print -quit)" ]; then
+    if ! command -v go >/dev/null 2>&1; then
+        printf '%s\n' 'Install Go 1.25.8 or later to build PageParse.' >&2
+        exit 1
+    fi
+    mkdir -p "$root/build"
+    (cd "$root" && go build -o "$binary" ./cmd/pageparse)
+fi
+
 cd "$root"
-exec "$python" -m pageparse.launcher "$@"
+export PAGEPARSE_PYTHON="$python"
+exec "$binary" "$@"

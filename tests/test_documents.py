@@ -60,6 +60,8 @@ def test_invalid_page_ranges(value):
 def test_page_range_sort_and_deduplication():
     assert select_pages("5, 2 - 4, 2, 1", 6) == [1, 2, 3, 4, 5]
     assert select_pages(" ", 3) == [1, 2, 3]
+    assert select_pages("all", 3) == [1, 2, 3]
+    assert select_pages(" ALL ", 3) == [1, 2, 3]
 
 
 def test_exif_transparency_and_envelope(tmp_path):

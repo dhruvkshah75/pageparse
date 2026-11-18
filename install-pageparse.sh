@@ -4,8 +4,8 @@ set -eu
 
 usage() {
     printf '%s\n' 'Usage: sh install-pageparse.sh [DIRECTORY]' \
-        'Clones PageParse into DIRECTORY (default: ./pageparse) and installs its client in .venv.' \
-        'Requires Linux, Git, and Python 3.12 with venv support.' \
+        'Clones PageParse into DIRECTORY (default: ./pageparse) and builds the TUI and installs the Python client in .venv.' \
+        'Requires Linux, Git, Go 1.25.8 or later, and Python 3.12 with venv support.' \
         'Set PAGEPARSE_REPO_URL to install from a fork or another Git remote.'
 }
 
@@ -24,7 +24,7 @@ if [ "$(uname -s)" != Linux ]; then
     exit 1
 fi
 
-for command in git python3.12; do
+for command in git go python3.12; do
     if ! command -v "$command" >/dev/null 2>&1; then
         printf 'Install %s before running the installer.\n' "$command" >&2
         exit 1

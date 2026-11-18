@@ -45,7 +45,7 @@ def source_type(path: Path):
 
 
 def select_pages(spec: str, count: int):
-    if not spec.strip():
+    if spec.strip().casefold() in ("", "all"):
         return list(range(1, count + 1))
     pages = set()
     for item in spec.split(","):
@@ -59,7 +59,7 @@ def select_pages(spec: str, count: int):
                 raise ValueError
         except ValueError:
             raise ServiceError(
-                "invalid_page_range", f"Enter pages between 1 and {count}, using numbers and ranges such as 1,3-5.",
+                "invalid_page_range", f"Enter pages between 1 and {count}, using all or ranges such as 1,3-5.",
             ) from None
         pages.update(range(start, end + 1))
     return sorted(pages)

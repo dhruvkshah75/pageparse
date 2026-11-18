@@ -12,11 +12,10 @@ from bs4 import BeautifulSoup
 import httpx
 from PIL import Image, ImageDraw, ImageFont
 import pymupdf
-from textual.widgets import Input, TextArea
 
-from pageparse.app import PageParse
 from pageparse.config import Settings
-from pageparse.models import Nemotron, Ollama
+from pageparse.models import Nemotron
+from pageparse.tui_backend import BackendSession
 
 TAG = "qwen2.5-coder:3b"
 
@@ -90,12 +89,6 @@ class MeasuredNemotron(Nemotron):
             })
 
 
-async def until(predicate, seconds=180):
-    async with asyncio.timeout(seconds):
-        while not predicate():
-            await asyncio.sleep(.03)
-
-
 async def wait_server(probe, predicate, seconds=30):
     start = monotonic()
     async with asyncio.timeout(seconds):
@@ -109,7 +102,11 @@ async def wait_server(probe, predicate, seconds=30):
 async def main(root):
     settings = replace(Settings.from_env(), index=root / ".state/exports.sqlite3")
     nemotron = MeasuredNemotron(settings)
-    app = PageParse(settings, nemotron=nemotron, ollama=Ollama(settings))
+    events = []
+    session = BackendSession(settings, "manual", lambda event, **fields: events.append((event, fields)))
+    session.nemotron = nemotron
+    session.default_destination = root
+    sequence = 0
     expected_box = fixtures(root)
     vllm = urlsplit(settings.vllm_url)
     metrics_url = f"{vllm.scheme}://{vllm.netloc}/metrics"
@@ -135,22 +132,24 @@ async def main(root):
             response = (await monitor.get(settings.ollama_url + "/api/ps")).raise_for_status().json()
             return [(item["name"], item.get("size_vram")) for item in response["models"]]
 
-        async with app.run_test(size=(120, 36)) as pilot:
-            await until(lambda: app.parse_view.status and app.chat_view.status and app.exports_view.available, 10)
-            assert app.parse_view.status.state == app.chat_view.status.state == "ready"
+        try:
+            session.begin()
+            await asyncio.gather(*session.tasks.values())
+            assert {fields["name"]: fields["state"] for event, fields in events if event == "connection"} == {
+                "Nemotron": "ready", "Ollama": "ready",
+            }
 
             async def start_parse(filename, pages=""):
-                await pilot.press("f1")
-                app.query_one("#source", Input).value = str(root / filename)
-                app.query_one("#pages", Input).value = pages
-                await pilot.press("f5")
-                assert app.parse_view.job is not None
+                nonlocal sequence
+                sequence += 1
+                session.dispatch({"op": "parse", "id": sequence, "clipboard": False,
+                                  "source": str(root / filename), "pages": pages})
+                return session.tasks["parse"]
 
             async def parse(filename, pages=""):
                 previous = len(nemotron.completions)
-                await start_parse(filename, pages)
-                await until(lambda: app.slot is None)
-                result = app.parse_view.result
+                await asyncio.wait_for(await start_parse(filename, pages), 180)
+                result = session.result
                 assert result and result["status"] == "complete", result and result["failure"]
                 for page, completion in zip(result["pages"], nemotron.completions[previous:], strict=True):
                     usage = completion["usage"]
@@ -166,12 +165,12 @@ async def main(root):
                 block = next(block for block in page["blocks"] if "Quarterly report" in block["text"])
                 assert all(abs(actual - expected) <= 12 for actual, expected in zip(block["bbox_pixels"], expected_box))
                 print("Region", block["bbox_pixels"], "reference", expected_box, flush=True)
-                app.query_one("#destination", Input).value = str(root)
-                await pilot.press("f7")
-                await until(lambda: (root / "report.md").is_file() and (root / "report.json").is_file())
+                session.dispatch({"op": "export", "destination": str(root), "format": "both"})
+                await session.tasks["export"]
+                assert (root / "report.md").is_file() and (root / "report.json").is_file()
 
             async def text_pdf():
-                result = await parse("text.pdf", "1-2")
+                result = await parse("text.pdf", "all")
                 first, dense = result["pages"]
                 text = dense["markdown"]
                 assert "Page one overview" in first["markdown"]
@@ -189,39 +188,51 @@ async def main(root):
                 assert result["pages"][0]["blocks"] == []
                 assert result["pages"][0]["markdown"] == ""
 
-            async def send(prompt):
-                await pilot.press("f2")
-                app.query_one("#prompt", TextArea).load_text(prompt)
-                await pilot.press("f5")
-                await until(lambda: bool(app.chat_view.turns) and app.chat_view.turns[-1].prompt == prompt, 10)
-                return app.chat_view.turns[-1]
+            def send(history):
+                start = len(events)
+                session.dispatch({"op": "chat", "model": TAG, "messages": history,
+                                  "retained": sum(len(message["content"].encode()) for message in history)})
+                return session.tasks["chat"], start
+
+            def chat_result(start):
+                reply = "".join(fields["content"] for event, fields in events[start:] if event == "chunk")
+                state = next(fields["status"] for event, fields in events[start:] if event == "chat_done")
+                return state, reply
 
             async def switches():
-                await start_parse("text.pdf", "2")
+                parsing = await start_parse("text.pdf", "2")
                 await wait_server(running, lambda number: number > 0, 12)
                 start = monotonic()
-                await pilot.press("f6")
-                await until(lambda: app.slot is None, 5)
-                assert app.parse_view.result["status"] == "cancelled"
-                assert app.parse_view.job.renderer.process is None
+                session.dispatch({"op": "stop_parse"})
+                await asyncio.wait_for(parsing, 5)
+                assert session.result["status"] == "cancelled"
+                assert session.job.renderer.process is None
                 print(f"Nemotron local cancellation and renderer reap {monotonic() - start:.2f}s", flush=True)
                 idle = asyncio.create_task(wait_server(running, lambda number: number == 0))
-                first = await send("Reply with exactly PARSE-27. Remember it for the next question.")
-                await until(lambda: app.slot is None)
-                assert first.state == "complete" and "PARSE-27" in first.reply, first.state
-                print(f"vLLM running/waiting fell to zero {((await idle)[0]):.2f}s after local cleanup", flush=True)
-                second = await send("Repeat the code from your previous answer. Give only the code.")
-                await until(lambda: app.slot is None)
-                assert second.state == "complete" and "PARSE-27" in second.reply, second.state
-                print("Qwen prompt and context-dependent follow-up passed", flush=True)
 
-                pending = await send("Output every number from 1 to 1000 separated by commas, without abbreviating.")
-                await until(lambda: bool(pending.reply), 180)
+                history = [{"role": "user", "content": "Reply with exactly PARSE-27. Remember it for the next question."}]
+                pending, offset = send(history)
+                await asyncio.wait_for(pending, 180)
+                state, reply = chat_result(offset)
+                assert state == "complete" and "PARSE-27" in reply, state
+                print(f"vLLM running/waiting fell to zero {((await idle)[0]):.2f}s after local cleanup", flush=True)
+                history.extend([{"role": "assistant", "content": reply},
+                                {"role": "user", "content": "Repeat the code from your previous answer. Give only the code."}])
+                pending, offset = send(history)
+                await asyncio.wait_for(pending, 180)
+                state, reply = chat_result(offset)
+                assert state == "complete" and "PARSE-27" in reply, state
+
+                pending, offset = send([{"role": "user", "content":
+                    "Output every number from 1 to 1000 separated by commas, without abbreviating."}])
+                async with asyncio.timeout(180):
+                    while not any(event == "chunk" for event, _ in events[offset:]):
+                        await asyncio.sleep(.03)
                 print("Ollama running model and VRAM before Stop", await loaded(), flush=True)
                 start = monotonic()
-                await pilot.press("f6")
-                await until(lambda: app.slot is None, 5)
-                assert pending.state == "stopped · incomplete"
+                session.dispatch({"op": "stop_chat"})
+                await asyncio.wait_for(pending, 5)
+                assert chat_result(offset)[0] == "stopped"
                 print(f"Ollama local cancellation {monotonic() - start:.2f}s", flush=True)
                 unloaded = asyncio.create_task(wait_server(loaded, lambda models: not models))
                 await scanned()
@@ -241,6 +252,8 @@ async def main(root):
                     print("FAIL", name, str(error), flush=True)
                 else:
                     print("PASS", name, flush=True)
+        finally:
+            await session.close()
     if failures:
         raise SystemExit("Failed checks: " + ", ".join(failures))
 

@@ -1,5 +1,4 @@
 """Start the requested local backends for a single PageParse session."""
-import argparse
 import asyncio
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -16,7 +15,7 @@ from time import monotonic
 
 import httpx
 
-from .config import NEMOTRON_ROOT, Settings, endpoint_label
+from .config import NEMOTRON_ROOT, endpoint_label
 
 SYSTEM_OLLAMA_MODELS = Path("/usr/share/ollama/.ollama/models")
 STARTUP_TIMEOUT = 180
@@ -231,64 +230,7 @@ async def start_backends(servers, owned, reused, log_dir, report):
             report(server, str(error))
 
 
-def parse_args(argv):
-    parser = argparse.ArgumentParser(prog="run-pageparse", description="Start the selected PageParse servers and open the TUI.")
-    modes = parser.add_mutually_exclusive_group()
-    modes.add_argument("--image", action="store_true", help="use Nemotron for document parsing (default)")
-    modes.add_argument("--chat", action="store_true", help="use Ollama and open Chat")
-    modes.add_argument("--both", action="store_true", help="start both backends")
-    return parser.parse_args(argv)
-
-
-def main(argv=None):
-    args = parse_args(argv)
-    owned = []
-    reused = []
-    try:
-        settings = Settings.from_env()
-        servers = []
-        if not args.chat:
-            servers.append(Server(
-                "Nemotron", settings.vllm_url, "/v1", "/models",
-                settings.nemotron_model, settings.api_key, settings.nemotron_root,
-            ))
-        if args.chat or args.both:
-            servers.append(Server("Ollama", settings.ollama_url, "", "/api/tags"))
-
-        from .app import PageParse
-
-        app = PageParse(
-            settings, initial_workspace="chat" if args.chat else "parse",
-            starting_backends=(server.name for server in servers),
-        )
-
-        def report(server, error):
-            app.backend_started(server.name, endpoint_label(server.api_url), error)
-
-        async def after_display(pilot):
-            await pilot.pause()
-            app.startup_task = asyncio.create_task(
-                start_backends(servers, owned, reused, settings.index.parent / "logs", report),
-            )
-
-        app.run(auto_pilot=after_display)
-    except KeyboardInterrupt:
-        return 130
-    except (LaunchError, OSError, ValueError) as error:
-        print(f"PageParse: {error}", file=sys.stderr)
-        return 1
-    finally:
-        stop_owned(owned)
-        for fd in reused:
-            stop_reused_nemotron(fd)
-    return 0
-
-
-def exit_on_signal(signum, frame):
-    raise SystemExit(128 + signum)
-
-
 if __name__ == "__main__":
-    signal.signal(signal.SIGTERM, exit_on_signal)
-    signal.signal(signal.SIGHUP, exit_on_signal)
-    raise SystemExit(main())
+    from .__main__ import main
+
+    main(manual=False)
