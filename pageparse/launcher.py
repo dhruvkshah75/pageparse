@@ -1,15 +1,18 @@
 """Start the requested local backends for a single PageParse session."""
 import argparse
+import asyncio
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 import fcntl
 import os
 from pathlib import Path
+import re
+from select import select
 import signal
 import subprocess
 import sys
 from tempfile import NamedTemporaryFile
-from time import monotonic, sleep
+from time import monotonic
 
 import httpx
 
@@ -17,6 +20,7 @@ from .config import NEMOTRON_ROOT, Settings, endpoint_label
 
 SYSTEM_OLLAMA_MODELS = Path("/usr/share/ollama/.ollama/models")
 STARTUP_TIMEOUT = 180
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 
 class LaunchError(Exception):
@@ -33,10 +37,10 @@ class Server:
     api_key: str = ""
     nemotron_root: Path = NEMOTRON_ROOT
 
-    def probe(self, client):
+    async def probe(self, client):
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
         try:
-            response = client.get(self.api_url.rstrip("/") + self.discovery_path, headers=headers)
+            response = await client.get(self.api_url.rstrip("/") + self.discovery_path, headers=headers)
         except httpx.ConnectError:
             return "offline"
         except (httpx.TimeoutException, httpx.RemoteProtocolError):
@@ -63,7 +67,7 @@ class Server:
 
     def local_command(self):
         url = httpx.URL(self.api_url)
-        if (url.scheme != "http" or url.host not in ("localhost", "127.0.0.1", "::1")
+        if (url.scheme != "http" or url.host not in LOOPBACK_HOSTS
                 or url.path.rstrip("/") != self.api_path or url.query or url.fragment or url.userinfo):
             raise LaunchError(f"Start {self.name} at {endpoint_label(self.api_url)} separately or configure a local HTTP endpoint.")
         host = "127.0.0.1" if url.host == "localhost" else url.host
@@ -109,11 +113,61 @@ def startup_lock(directory):
         yield
 
 
-def ensure_server(server, client, owned, log_dir):
-    state = server.probe(client)
+def nemotron_listener(server):
+    """Pin a verified same-user vLLM listener so PID reuse cannot redirect shutdown."""
+    url = httpx.URL(server.api_url)
+    if not server.model or url.host not in LOOPBACK_HOSTS:
+        return None
+    port = url.port or (443 if url.scheme == "https" else 80)
+    try:
+        sockets = subprocess.run(
+            ["ss", "-H", "-ltnp", f"sport = :{port}"], check=True,
+            capture_output=True, text=True, timeout=2,
+        ).stdout.splitlines()
+        owners = [re.findall(r"\bpid=(\d+)\b", socket) for socket in sockets]
+        if not owners or any(not pids for pids in owners):
+            return None
+        pids = {int(pid) for owners_of_socket in owners for pid in owners_of_socket}
+        if len(pids) != 1:
+            return None
+        pid, = pids
+        fd = os.pidfd_open(pid)
+        try:
+            proc = Path(f"/proc/{pid}")
+            command = (proc / "cmdline").read_bytes().rstrip(b"\0").split(b"\0")
+            executable = Path(os.fsdecode(command[0])).name
+            if executable.startswith("python"):
+                command = command[1:]
+            if command[:2] == [b"-m", b"vllm.entrypoints.cli.main"]:
+                command = [b"vllm", *command[2:]]
+            if (proc.stat().st_uid == os.geteuid() and len(command) >= 2
+                    and Path(os.fsdecode(command[0])).name == "vllm" and command[1] == b"serve"):
+                return fd
+        except OSError:
+            pass
+        os.close(fd)
+    except (OSError, subprocess.SubprocessError, AttributeError):
+        pass
+    return None
+
+
+def stop_reused_nemotron(fd):
+    try:
+        signal.pidfd_send_signal(fd, signal.SIGTERM)
+        if not select([fd], [], [], 8)[0]:
+            print("Nemotron did not exit within 8 seconds of the shutdown request.", file=sys.stderr)
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        print(f"Could not stop the reused Nemotron server: {error.strerror}.", file=sys.stderr)
+    finally:
+        os.close(fd)
+
+
+async def ensure_server(server, client, owned, log_dir):
+    state = await server.probe(client)
     if state == "ready":
-        print(f"Using running {server.name} at {endpoint_label(server.api_url)}.", flush=True)
-        return
+        return nemotron_listener(server)
 
     process = None
     log_path = None
@@ -129,22 +183,19 @@ def ensure_server(server, client, owned, log_dir):
             except OSError as error:
                 raise LaunchError(f"Could not start {server.name}. Check {command[0]} and its permissions. {error.strerror}.") from None
             owned.append(process)
-        print(f"Starting {server.name} in the background. Log: {log_path}", flush=True)
-    else:
-        print(f"Waiting for the existing {server.name} server.", flush=True)
 
     deadline = monotonic() + STARTUP_TIMEOUT
     while monotonic() < deadline:
         try:
-            if server.probe(client) == "ready":
-                return
+            if await server.probe(client) == "ready":
+                return nemotron_listener(server) if process is None else None
         except LaunchError as error:
             if log_path:
                 raise LaunchError(f"{error} See {log_path}.") from None
             raise
         if process is not None and process.poll() is not None:
             raise LaunchError(f"{server.name} exited during startup. See {log_path}.")
-        sleep(.5)
+        await asyncio.sleep(.5)
     details = f" See {log_path}." if log_path else ""
     raise LaunchError(f"{server.name} did not become ready within {STARTUP_TIMEOUT} seconds.{details}")
 
@@ -162,6 +213,24 @@ def stop_owned(owned):
             process.wait()
 
 
+async def start_backends(servers, owned, reused, log_dir, report):
+    try:
+        with startup_lock(log_dir):
+            async with httpx.AsyncClient(trust_env=False, timeout=2) as client:
+                for server in servers:
+                    try:
+                        fd = await ensure_server(server, client, owned, log_dir)
+                        if fd is not None:
+                            reused.append(fd)
+                    except (LaunchError, OSError, ValueError) as error:
+                        report(server, str(error))
+                    else:
+                        report(server, None)
+    except (LaunchError, OSError) as error:
+        for server in servers:
+            report(server, str(error))
+
+
 def parse_args(argv):
     parser = argparse.ArgumentParser(prog="run-pageparse", description="Start the selected PageParse servers and open the TUI.")
     modes = parser.add_mutually_exclusive_group()
@@ -174,6 +243,7 @@ def parse_args(argv):
 def main(argv=None):
     args = parse_args(argv)
     owned = []
+    reused = []
     try:
         settings = Settings.from_env()
         servers = []
@@ -185,14 +255,23 @@ def main(argv=None):
         if args.chat or args.both:
             servers.append(Server("Ollama", settings.ollama_url, "", "/api/tags"))
 
-        log_dir = settings.index.parent / "logs"
-        with startup_lock(log_dir), httpx.Client(trust_env=False, timeout=2) as client:
-            for server in servers:
-                ensure_server(server, client, owned, log_dir)
-
         from .app import PageParse
 
-        PageParse(settings, initial_workspace="chat" if args.chat else "parse").run()
+        app = PageParse(
+            settings, initial_workspace="chat" if args.chat else "parse",
+            starting_backends=(server.name for server in servers),
+        )
+
+        def report(server, error):
+            app.backend_started(server.name, endpoint_label(server.api_url), error)
+
+        async def after_display(pilot):
+            await pilot.pause()
+            app.startup_task = asyncio.create_task(
+                start_backends(servers, owned, reused, settings.index.parent / "logs", report),
+            )
+
+        app.run(auto_pilot=after_display)
     except KeyboardInterrupt:
         return 130
     except (LaunchError, OSError, ValueError) as error:
@@ -200,6 +279,8 @@ def main(argv=None):
         return 1
     finally:
         stop_owned(owned)
+        for fd in reused:
+            stop_reused_nemotron(fd)
     return 0
 
 

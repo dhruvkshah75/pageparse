@@ -55,8 +55,10 @@ class ChatView(Vertical):
     async def discover(self):
         endpoint = endpoint_label(self.app.settings.ollama_url)
         self.query_one("#chat-connection", Static).update(f"Ollama · {endpoint} · checking")
-        self.status = await self.app.ollama.status()
-        state = self.status
+        self.update_connection(await self.app.ollama.status())
+
+    def update_connection(self, state):
+        self.status = state
         detail = f" · {state.message}" if state.state != "ready" else ""
         self.query_one("#chat-connection", Static).update(f"Ollama · {state.endpoint} · {state.state}{detail}")
         if not self.turn_task:

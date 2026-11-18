@@ -115,8 +115,11 @@ class ParseView(Vertical):
         settings = self.app.settings
         endpoint = endpoint_label(settings.vllm_url)
         self.query_one("#parse-connection", Static).update(f"{settings.nemotron_model} · {endpoint} · checking")
-        self.status = await self.app.nemotron.status()
-        status = self.status
+        self.update_connection(await self.app.nemotron.status())
+
+    def update_connection(self, status):
+        self.status = status
+        settings = self.app.settings
         detail = f" · {status.message}" if status.state != "ready" else ""
         self.query_one("#parse-connection", Static).update(
             f"{settings.nemotron_model} · {status.endpoint} · {status.state}{detail}",

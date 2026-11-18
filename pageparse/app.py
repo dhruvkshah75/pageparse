@@ -10,11 +10,11 @@ from textual.theme import Theme
 from textual.widgets import Button, Footer, Input, Static, TabbedContent, TabPane
 
 from .chat_view import ChatView
-from .config import Settings
+from .config import Settings, endpoint_label
 from .exports import ExportStore
 from .exports_view import ExportsView
 from .jobs import DocumentJob
-from .models import Nemotron, Ollama
+from .models import Discovery, Nemotron, Ollama
 from .parse_view import ParseView
 
 
@@ -82,7 +82,7 @@ class PageParse(App):
     ]
 
     def __init__(self, settings=None, *, nemotron=None, ollama=None, store=None,
-                 job_factory=DocumentJob, initial_workspace="parse"):
+                 job_factory=DocumentJob, initial_workspace="parse", starting_backends=()):
         super().__init__()
         self.register_theme(CHARCOAL)
         self.theme = CHARCOAL.name
@@ -92,6 +92,8 @@ class PageParse(App):
         self.store = store or ExportStore(self.settings.index)
         self.job_factory = job_factory
         self.initial_workspace = initial_workspace
+        self.starting_backends = set(starting_backends)
+        self.startup_task = None
         self.slot = None
         self.sequence = 0
 
@@ -111,6 +113,12 @@ class PageParse(App):
         self.parse_view = self.query_one(ParseView)
         self.chat_view = self.query_one(ChatView)
         self.exports_view = self.query_one(ExportsView)
+        for name, view, url in (
+            ("Nemotron", self.parse_view, self.settings.vllm_url),
+            ("Ollama", self.chat_view, self.settings.ollama_url),
+        ):
+            if name in self.starting_backends:
+                view.update_connection(Discovery("starting", endpoint_label(url), "Warming up in the background."))
         self.action_refresh_services()
 
     def on_resize(self, event):
@@ -141,9 +149,19 @@ class PageParse(App):
     def action_refresh_services(self):
         if isinstance(self.screen, ModalScreen):
             return
-        self.parse_view.refresh_connection()
-        self.chat_view.refresh_connection()
+        if "Nemotron" not in self.starting_backends:
+            self.parse_view.refresh_connection()
+        if "Ollama" not in self.starting_backends:
+            self.chat_view.refresh_connection()
         self.exports_view.refresh_index()
+
+    def backend_started(self, name, endpoint, error):
+        self.starting_backends.discard(name)
+        view = self.parse_view if name == "Nemotron" else self.chat_view
+        if error:
+            view.update_connection(Discovery("startup failed", endpoint, error))
+        else:
+            view.refresh_connection()
 
     def action_primary(self):
         if isinstance(self.screen, ModalScreen):
@@ -185,6 +203,9 @@ class PageParse(App):
         return await future
 
     async def action_quit(self):
+        if self.startup_task:
+            self.startup_task.cancel()
+            await asyncio.gather(self.startup_task, return_exceptions=True)
         if hasattr(self, "parse_view"):
             while isinstance(self.screen, ModalScreen):
                 self.screen.dismiss(None)

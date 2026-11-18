@@ -23,7 +23,7 @@ Set up the backend you plan to use once, then run the matching command from the 
 | `./run-pageparse --chat` | Chat with Ollama |
 | `./run-pageparse --both` | Parse with both backends available |
 
-The launcher starts selected local servers in the background, waits for their APIs, and reuses any compatible service already running. **Ctrl+Q** stops the services that this launch started. Startup logs go to `$XDG_STATE_HOME/pageparse/logs/` or `~/.local/state/pageparse/logs/`.
+The launcher opens the TUI immediately and starts selected local servers in the background. Each workspace shows its startup status and enables inference when its server is ready. Compatible services that are already running are reused. **Ctrl+Q** stops the services that this launch started. It also stops a reused local Nemotron server when the launcher can verify it is a vLLM process owned by you. Remote servers and existing Ollama services keep running. Startup logs go to `$XDG_STATE_HOME/pageparse/logs/` or `~/.local/state/pageparse/logs/`.
 
 ## Model setup
 
