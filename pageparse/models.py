@@ -28,6 +28,16 @@ _BLOCK = re.compile(
 _HELPER_LOCK = Lock()
 
 
+async def run_sync(function, *args):
+    """Run blocking local work and drain it before releasing a cancelled job."""
+    task = asyncio.create_task(asyncio.to_thread(function, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await asyncio.gather(task, return_exceptions=True)
+        raise
+
+
 class ServiceError(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -208,13 +218,13 @@ class Nemotron(Backend):
         result = await self.discover("/models", "data", "id", f"Serve {model} in vLLM and refresh.", model)
         if result.state == "ready":
             try:
-                await asyncio.to_thread(self.get_helper)
+                await run_sync(self.get_helper)
             except ServiceError as error:
                 return Discovery("helper unavailable", self.endpoint, str(error), result.models)
         return result
 
     async def parse(self, png: bytes, width: int, height: int):
-        helper = await asyncio.to_thread(self.get_helper)
+        helper = await run_sync(self.get_helper)
         model = self.settings.nemotron_model
         data_url = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
         payload = {
@@ -245,7 +255,7 @@ class Nemotron(Backend):
         except ValueError:
             body = None
         raw = completion_content(body)
-        return await asyncio.to_thread(postprocess, raw, width, height, helper)
+        return await run_sync(postprocess, raw, width, height, helper)
 
 
 class Ollama(Backend):
