@@ -22,6 +22,8 @@ const (
 	onCoralHex  = "#141413"
 	hairlineHex = "#4b443d"
 	amberHex    = "#e8a55a"
+	formLabel   = 9
+	formIndent  = 2 + formLabel
 )
 
 var (
@@ -60,7 +62,7 @@ func (m *model) layout() layout {
 func (m *model) resize() {
 	l := m.layout()
 	for _, field := range []control{source, pages, destination} {
-		m.inputs[field].SetWidth(max(1, l.form-12))
+		m.inputs[field].SetWidth(max(1, l.form-formIndent-1))
 	}
 	m.preview.SetWidth(max(1, l.viewer-4))
 	previewHeight := l.height
@@ -136,7 +138,12 @@ func (m *model) View() tea.View {
 		if hasStatus {
 			headerArea.add(0, m.height-2, ansi.StringWidth(statusLine), 1, statusDetails)
 		}
-		footer := lipAccent.Render(fit(statusLine, l.width)) + "\n" + lipMuted.Render(fit(hint, l.width))
+		const helpLabel = "? Help · F11"
+		helpX := l.width - ansi.StringWidth(helpLabel)
+		hint = fit(hint, helpX-2)
+		headerArea.add(helpX, m.height-1, l.width-helpX, 1, helpScreen)
+		footer := lipAccent.Render(fit(statusLine, l.width)) + "\n" + lipMuted.Render(hint) +
+			strings.Repeat(" ", helpX-ansi.StringWidth(hint)) + lipAccent.Bold(true).Render(helpLabel)
 		paddedBody := lipgloss.NewStyle().Height(l.height).MaxHeight(l.height).Render(body)
 		content = leftPad(header + "\n" + paddedBody + "\n" + footer)
 	}
@@ -178,11 +185,11 @@ func (m *model) masthead(width int, area hitArea) string {
 				height: 1, workspace: tab.workspace, option: -1})
 		}
 		x += len(label) + 2
+		nameStyle := lipMuted
 		if tab.workspace == m.workspace {
-			items = append(items, lipText.Background(surface).Bold(true).Render(" "+label+" "))
-		} else {
-			items = append(items, lipMuted.Render(" "+label+" "))
+			nameStyle = lipAccent.Bold(true)
 		}
+		items = append(items, " ", lipMuted.Render(tab.key), " ", nameStyle.Render(tab.title), " ")
 	}
 	return fit(strings.Join(items, ""), width)
 }
@@ -222,15 +229,21 @@ func (m *model) connectionLine(width int) string {
 
 func (m *model) keyHint() string {
 	switch m.focus {
+	case source, pages, destination:
+		if m.width >= 63 {
+			return "↑↓ Move  Tab Next  F5 Parse  F8 Paste image  F9 Copy"
+		}
+		return "↑↓ Move  Tab Next  F9 Copy"
+	case browse, format:
+		return "↑↓ Move  ↵ Open  Tab Next  F9 Copy"
+	case parseStart, parseStop, export:
+		return "↑ ← → Move  ↵ Activate  Tab Next"
 	case preview, transcript, exportDetails:
 		return "↑↓ Scroll  PgUp/PgDn  F9 Copy  Tab Next"
-	case browse, format, previewMode, chatModel, deleteFiles:
+	case previewMode, chatModel, deleteFiles:
 		return "↵ Open  ↑↓ Choose  Tab Next  F9 Copy"
 	case exportList:
 		return "↑↓ Browse  Space Select  Tab Next  F9 Copy"
-	}
-	if m.workspace == "parse" && m.width >= 63 {
-		return "Tab Next   F5 Parse   F6 Cancel   F7 Export   F8 Paste image   F9 Copy"
 	}
 	return "Tab Next  F9 Copy  Ctrl+Q Quit"
 }
@@ -280,7 +293,7 @@ func (m *model) input(id control, label string, width int) string {
 		marker = "› "
 		caption = lipAccent.Bold(true)
 	}
-	return fit(caption.Render(fmt.Sprintf("%s%-9s", marker, label))+m.inputs[id].View(), width)
+	return fit(caption.Render(fmt.Sprintf("%s%-*s", marker, formLabel, label))+m.inputs[id].View(), width)
 }
 
 func (m *model) formView(width, height int, area hitArea) string {
@@ -303,13 +316,15 @@ func (m *model) formView(width, height int, area hitArea) string {
 		}
 		return line
 	}
+	browseButton := m.button(browse, "Browse files", false)
 	lines := []formLine{
 		{text: lipText.Bold(true).Render("Document")},
 		row(source, m.input(source, "Source", width)),
-		row(browse, "  "+m.button(browse, "Browse files", false)),
+		{strings.Repeat(" ", formIndent) + browseButton,
+			[]hit{{x: formIndent, width: ansi.StringWidth(browseButton), target: browse}}},
 		row(pages, m.input(pages, "Pages", width)),
 		row(destination, m.input(destination, "Output", width)),
-		row(format, "  "+lipMuted.Render("Format   ")+m.button(format, choiceLabel(outputFormats, m.format)+" ▾", false)),
+		row(format, "  "+lipMuted.Render(fmt.Sprintf("%-*s", formLabel, "Format"))+m.button(format, choiceLabel(outputFormats, m.format)+" ▾", false)),
 		{},
 		buttons([]control{parseStart, parseStop, export}, []string{"Start", "Cancel", "Export"}),
 	}
@@ -507,11 +522,19 @@ func paintLine(line string, width int, style lipgloss.Style) string {
 	return out
 }
 
-func (m *model) dialogWidth() int { return min(72, max(12, m.width-6)) }
-func (m *model) dialogRows() int  { return max(1, m.height-8) }
+func (m *model) dialogWidth() int {
+	if m.dialog != nil && m.dialog.kind == helpScreen {
+		return max(12, m.width-6)
+	}
+	return min(72, max(12, m.width-6))
+}
+func (m *model) dialogRows() int { return max(1, m.height-8) }
 
 func (m *model) dialogDetailLines(d *dialog) []string {
 	detail := strings.ReplaceAll(safeText(d.detail), "\t", "    ")
+	if d.kind == helpScreen {
+		return strings.Split(ansi.Wrap(detail, m.dialogWidth()-4, ""), "\n")
+	}
 	return strings.Split(ansi.Hardwrap(detail, m.dialogWidth()-4, true), "\n")
 }
 func (m *model) dialogDetailMaxOffset(d *dialog) int {
@@ -545,6 +568,9 @@ func (m *model) renderDialog(area hitArea) string {
 		area.text(0, len(lines), backButton, dialogBack)
 		actions := backButton
 		hint := "Esc"
+		if d.kind == helpScreen {
+			hint = "Esc  ↑↓ Scroll  PgUp/PgDn"
+		}
 		if d.action != "Close" {
 			area.text(ansi.StringWidth(backButton)+1, len(lines), acceptButton, dialogAccept)
 			actions += " " + acceptButton

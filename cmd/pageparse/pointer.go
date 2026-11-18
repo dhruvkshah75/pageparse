@@ -121,6 +121,10 @@ func (m *model) usePointer(action pointerAction) tea.Cmd {
 	if action.workspace != "" {
 		return m.switchWorkspace(action.workspace)
 	}
+	if action.target == helpScreen {
+		m.toggleHelp()
+		return nil
+	}
 	if action.target == statusDetails {
 		m.openStatus()
 		return nil

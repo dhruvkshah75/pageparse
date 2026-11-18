@@ -43,9 +43,10 @@ func TestResponsiveWorkspaces(t *testing.T) {
 func TestKeyboardDropdowns(t *testing.T) {
 	m := newModel(nil, "parse")
 	m.setFocus(format)
+	press(m, tea.KeyEnter)
 	press(m, tea.KeyDown)
 	if m.dialog == nil || m.dialog.choices[m.dialog.cursor].value != "md" {
-		t.Fatal("Down should open the format menu and move to Markdown")
+		t.Fatal("Enter should open the format menu and Down should move to Markdown")
 	}
 	press(m, tea.KeyDown)
 	press(m, tea.KeyEnter)
@@ -68,6 +69,129 @@ func TestKeyboardDropdowns(t *testing.T) {
 	press(m, tea.KeyEnter)
 	if m.chatID != "alternate" {
 		t.Fatalf("model changed to %q", m.chatID)
+	}
+}
+
+func TestParseArrowNavigation(t *testing.T) {
+	m := newModel(nil, "parse")
+	m.inputs[source].SetValue("/tmp/my file.pdf")
+	pos := m.inputs[source].Position()
+	press(m, tea.KeyLeft)
+	if m.focus != source || m.inputs[source].Position() != pos-1 {
+		t.Fatal("Left should move the cursor in Source")
+	}
+	steps := []struct {
+		key  rune
+		want control
+	}{
+		{tea.KeyDown, browse}, {tea.KeyUp, source}, {tea.KeyDown, browse},
+		{tea.KeyDown, pages}, {tea.KeyDown, destination}, {tea.KeyDown, format},
+		{tea.KeyDown, parseStart}, {tea.KeyRight, parseStop}, {tea.KeyRight, export},
+		{tea.KeyLeft, parseStop}, {tea.KeyUp, format}, {tea.KeyUp, destination},
+	}
+	for _, step := range steps {
+		press(m, step.key)
+		if m.focus != step.want || m.dialog != nil {
+			t.Fatalf("focus = %s, want %s with no dialog", m.focus, step.want)
+		}
+	}
+}
+
+func TestBrowseButtonAlignsWithSource(t *testing.T) {
+	m := newModel(nil, "parse")
+	view := m.View()
+	lines := strings.Split(ansi.Strip(view.Content), "\n")
+	buttonX := strings.Index(lines[5], "Browse files") - 1 // The button starts with a focus marker or space.
+	prefix, _, found := strings.Cut(lines[4], "Path to PDF or image")
+	if inputX := ansi.StringWidth(prefix); !found || buttonX != inputX {
+		t.Fatalf("Browse starts at %d, Source input starts at %d", buttonX, inputX)
+	}
+	cmd := view.OnMouse(tea.MouseClickMsg{X: buttonX, Y: 5, Button: tea.MouseLeft})
+	if cmd == nil {
+		t.Fatal("Browse should be clickable at its new position")
+	}
+	m.Update(cmd())
+	if m.dialog == nil || m.dialog.kind != browse {
+		t.Fatal("Click should open the file browser")
+	}
+}
+
+func TestHelpOpensScrollsAndRestoresPreviousScreen(t *testing.T) {
+	m := newModel(nil, "parse")
+	m.Update(tea.WindowSizeMsg{Width: 110, Height: 16})
+	view := m.View()
+	click := view.OnMouse(tea.MouseClickMsg{X: 105, Y: 15, Button: tea.MouseLeft})
+	if click == nil {
+		t.Fatal("expected a clickable Help control in the footer")
+	}
+	m.Update(click())
+	if m.dialog == nil || m.dialog.kind != helpScreen || m.dialogWidth() != 104 ||
+		!strings.Contains(ansi.Strip(m.View().Content), "F1  Parse PDFs and images") {
+		t.Fatal("expected the full-width shortcut guide to open")
+	}
+	view = m.View()
+	wheel := view.OnMouse(tea.MouseWheelMsg{X: 10, Y: 6, Button: tea.MouseWheelDown})
+	if wheel == nil {
+		t.Fatal("expected the help body to receive mouse scrolling")
+	}
+	m.Update(wheel())
+	if m.dialog.offset == 0 {
+		t.Fatal("mouse wheel did not scroll Help")
+	}
+	offset := m.dialog.offset
+	press(m, tea.KeyPgDown)
+	if m.dialog.offset <= offset {
+		t.Fatal("Page Down did not scroll Help")
+	}
+	m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
+	press(m, tea.KeyEnd)
+	lines := strings.Split(m.View().Content, "\n")
+	if len(lines) > 10 || m.dialog.offset != m.dialogDetailMaxOffset(m.dialog) ||
+		!strings.Contains(ansi.Strip(m.View().Content), "characters.") {
+		t.Fatal("expected the final help entry to fit on the narrow screen")
+	}
+	for _, line := range lines {
+		if ansi.StringWidth(line) > 30 {
+			t.Fatal("help line is wider than the terminal")
+		}
+	}
+	press(m, tea.KeyEsc)
+	if m.dialog != nil || m.focus != source {
+		t.Fatal("Esc should return to the focused Source field")
+	}
+	m.setFocus(format)
+	press(m, tea.KeyEnter)
+	menu := m.dialog
+	press(m, tea.KeyF11)
+	press(m, tea.KeyF11)
+	if menu == nil || m.dialog != menu {
+		t.Fatal("F11 should restore the previously open menu")
+	}
+}
+
+func TestQuestionMarkShortcut(t *testing.T) {
+	m := newModel(nil, "parse")
+	for _, key := range []tea.KeyPressMsg{
+		{Code: '?', Text: "?"},
+		{Code: '/', Mod: tea.ModShift, ShiftedCode: '?', Text: "?"},
+		{Code: '/', Mod: tea.ModShift},
+		{Code: '/', Mod: tea.ModShift, Text: "/"},
+		{Code: '?', Mod: tea.ModShift},
+	} {
+		m.Update(key)
+		if m.dialog == nil || m.dialog.kind != helpScreen || m.inputs[source].Value() != "" {
+			t.Fatalf("%#v should open Help from Source", key)
+		}
+		m.Update(key)
+		if m.dialog != nil || m.focus != source {
+			t.Fatalf("%#v should close Help and restore Source focus", key)
+		}
+	}
+	press(m, tea.KeyF2)
+	m.prompt.SetValue("Why")
+	m.Update(tea.KeyPressMsg{Code: '/', Mod: tea.ModAlt | tea.ModShift})
+	if m.dialog != nil || m.prompt.Value() != "Why?" {
+		t.Fatal("Alt+? should insert punctuation into the message")
 	}
 }
 

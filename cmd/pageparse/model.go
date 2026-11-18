@@ -36,6 +36,7 @@ const (
 	exportList    control = "export list"
 	exportDetails control = "export details"
 	deleteFiles   control = "delete"
+	helpScreen    control = "help"
 )
 
 var workspacesByKey = map[string]string{"f1": "parse", "f2": "chat", "f3": "exports"}
@@ -59,6 +60,7 @@ type dialog struct {
 	targets                   [][2]string
 	confirmFocused            bool
 	kind                      control
+	underlying                *dialog
 }
 
 type turn struct{ prompt, reply, state string }
@@ -421,6 +423,18 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 	if name == "ctrl+c" || name == "f9" {
 		return m.copy(name == "ctrl+c")
 	}
+	stroke := key.Keystroke()
+	switch stroke {
+	case "alt+?", "alt+shift+?", "alt+shift+/":
+		if m.dialog == nil {
+			return m.updateWidget(tea.KeyPressMsg{Code: '?', Text: "?"})
+		}
+		return nil
+	}
+	if name == "f11" || name == "?" || stroke == "shift+/" || stroke == "shift+?" {
+		m.toggleHelp()
+		return nil
+	}
 	if m.dialog != nil {
 		return m.dialogKey(name)
 	}
@@ -468,13 +482,18 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		}
 		return m.updateWidget(key)
 	default:
+		if m.workspace == "parse" {
+			if next := parseArrowFocus(m.focus, name); next != "" {
+				return m.setFocus(next)
+			}
+		}
 		if m.focus == exportList {
 			m.moveGroup(name)
 			return nil
 		}
 		if name == "up" || name == "down" {
 			switch m.focus {
-			case format, previewMode, chatModel, deleteFiles:
+			case previewMode, chatModel, deleteFiles:
 				m.activate()
 				if m.dialog != nil {
 					m.dialogKey(name)
@@ -493,6 +512,34 @@ func (m *model) switchWorkspace(workspace string) tea.Cmd {
 		m.submit(request{"op": "index"})
 	}
 	return m.setFocus(defaultFocus(workspace))
+}
+
+func parseArrowFocus(current control, key string) control {
+	controls := workspaceControls["parse"]
+	index := slices.Index(controls, current)
+	switch current {
+	case source, browse, pages, destination, format:
+		if key == "down" {
+			return controls[index+1]
+		}
+		if key == "up" && current != source {
+			return controls[index-1]
+		}
+	case parseStart, parseStop, export:
+		switch key {
+		case "up":
+			return format
+		case "left":
+			if current != parseStart {
+				return controls[index-1]
+			}
+		case "right":
+			if current != export {
+				return controls[index+1]
+			}
+		}
+	}
+	return ""
 }
 
 func (m *model) enabled(field control) bool {

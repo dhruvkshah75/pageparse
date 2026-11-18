@@ -97,6 +97,10 @@ func (m *model) openBrowser(path string) {
 }
 
 func (m *model) closeDialog() {
+	if m.dialog != nil && m.dialog.kind == helpScreen && m.dialog.underlying != nil {
+		m.dialog = m.dialog.underlying
+		return
+	}
 	m.dialog, m.pendingExport = m.pendingExport, nil
 }
 
