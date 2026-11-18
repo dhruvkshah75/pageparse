@@ -2,6 +2,10 @@
 
 PageParse is a Linux terminal app for parsing PDFs and images with NVIDIA Nemotron 3.5 Parse and chatting with local Ollama models. Preview extracted text and tables, save Markdown or structured JSON, and manage your exports from the same TUI.
 
+![PageParse’s dark terminal interface with document controls on the left and extracted PDF text on the right](docs/pageparse-tui.png)
+
+*The Parse workspace keeps page selection and export settings beside the preview, so you can review the extracted text before copying or exporting it.*
+
 ## Install and run
 
 Install Git, curl, Go 1.25.8 or later, and Python 3.12 with virtual environment support. On Ubuntu, the virtual environment support is packaged as `python3.12-venv`.
@@ -80,10 +84,13 @@ The TUI uses a warm charcoal palette with coral controls and cream text.
 | **F8** | Paste an image into Parse |
 | **F9** | Copy the current preview, chat transcript, or export details |
 | **F10** | Open the full status message or export paths |
+| **? / F11** | Open or close the full-screen shortcut guide. You can also click **? Help**. |
+| **Alt+?** | Insert a question mark in a text field |
 | **Ctrl+C** | Copy the focused input or workspace text |
 | **Tab / Shift+Tab** | Move focus between fields, buttons, and output |
-| **Enter / ↑ / ↓** | Open a focused dropdown, then move between choices |
-| **Enter / Esc** | Select a choice or close the menu |
+| **↑ / ↓** | Move between Parse fields or between choices in an open menu |
+| **← / →** | Move between Parse action buttons |
+| **Enter / Esc** | Open a menu, select a choice, or close the menu with Esc |
 | **Ctrl+Q** | Quit |
 
 **Parse.** Browse or paste a path to a text or scanned PDF, PNG, JPEG, or WebP. Enter `all`, leave Pages blank, or enter a range such as `1,3-5`. Press **F8** to paste an image. On Wayland, install `wl-clipboard` if your desktop blocks the clipboard reader.
