@@ -12,3 +12,9 @@
 - `python -m pytest -q tests/test_models.py tests/test_documents.py tests/test_jobs.py` passed 45 tests.
 - Exercised cropped and rotated text PDF rendering, raster-only and wide pages, image orientation and transparency, pre-decode size limits, locked and invalid PDFs, and ordered page selection.
 - Verified sequential requests, retained-result limits, truncation and timeouts, late HTTP reply handling, and cancellation of a renderer that ignored termination. The job returned after reaping the child and retained its completed page.
+
+## Stage 3 · Export storage and cleanup
+
+- `python -m pytest -q tests/test_models.py tests/test_documents.py tests/test_jobs.py tests/test_exports.py` passed 59 tests.
+- Verified process exits before staging identity, before content, and after either final link. A second process received a retryable lock error while publication was in progress and recovered the saved pair afterward.
+- Verified no-clobber collisions, unsupported publication, failed rollback with an indexed survivor, trusted-directory enforcement, and deletion with identity and digest checks. Confirmed originals, unrelated files, and unselected formats survive cleanup.
