@@ -72,3 +72,24 @@ def test_launch_flags(tmp_path, monkeypatch, args, servers, workspace):
     assert calls == servers
     assert app.call_args.kwargs["initial_workspace"] == workspace
     app.return_value.run.assert_called_once()
+
+
+def test_custom_nemotron_root_controls_runtime_and_helper(tmp_path, monkeypatch):
+    from pageparse.config import Settings
+
+    monkeypatch.setenv("PAGEPARSE_NEMOTRON_ROOT", str(tmp_path))
+    monkeypatch.setenv("PAGEPARSE_VLLM_URL", "http://localhost:8000/v1")
+    monkeypatch.delenv("PAGEPARSE_NEMOTRON_HELPERS", raising=False)
+    settings = Settings.from_env()
+    server = Server("Nemotron", settings.vllm_url, "/v1", "/models",
+                    settings.nemotron_model, settings.api_key, settings.nemotron_root)
+    with pytest.raises(LaunchError, match="Nemotron setup is missing"):
+        server.local_command()
+
+    runtime = tmp_path / ".venv/bin/vllm"
+    runtime.parent.mkdir(parents=True)
+    runtime.touch(mode=0o700)
+    settings.helpers.mkdir()
+    command, environment = server.local_command()
+    assert command[:3] == [str(runtime), "serve", str(settings.helpers)]
+    assert environment["HF_HOME"] == str(tmp_path / "hf_cache")

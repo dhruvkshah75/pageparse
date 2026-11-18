@@ -13,9 +13,8 @@ from time import monotonic, sleep
 
 import httpx
 
-from .config import Settings, endpoint_label
+from .config import NEMOTRON_ROOT, Settings, endpoint_label
 
-NEMOTRON_ROOT = Path("/opt/nemotron")
 SYSTEM_OLLAMA_MODELS = Path("/usr/share/ollama/.ollama/models")
 STARTUP_TIMEOUT = 180
 
@@ -32,6 +31,7 @@ class Server:
     discovery_path: str
     model: str | None = None
     api_key: str = ""
+    nemotron_root: Path = NEMOTRON_ROOT
 
     def probe(self, client):
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
@@ -70,9 +70,16 @@ class Server:
         port = str(url.port or 80)
         env = os.environ.copy()
         if self.model:
-            env["HF_HOME"] = str(NEMOTRON_ROOT / "hf_cache")
+            runtime = self.nemotron_root / ".venv/bin/vllm"
+            weights = self.nemotron_root / "model"
+            if not os.access(runtime, os.X_OK) or not weights.is_dir():
+                raise LaunchError(
+                    f"Nemotron setup is missing in {self.nemotron_root}. See the model setup in README.md "
+                    "or set PAGEPARSE_NEMOTRON_ROOT to your existing installation."
+                )
+            env["HF_HOME"] = str(self.nemotron_root / "hf_cache")
             command = [
-                str(NEMOTRON_ROOT / ".venv/bin/vllm"), "serve", str(NEMOTRON_ROOT / "model"),
+                str(runtime), "serve", str(weights),
                 "--host", host, "--port", port, "--served-model-name", self.model,
                 "--trust-remote-code", "--max-num-seqs", "1", "--max-model-len", "8744",
                 "--gpu-memory-utilization", "0.80",
@@ -171,7 +178,10 @@ def main(argv=None):
         settings = Settings.from_env()
         servers = []
         if not args.chat:
-            servers.append(Server("Nemotron", settings.vllm_url, "/v1", "/models", settings.nemotron_model, settings.api_key))
+            servers.append(Server(
+                "Nemotron", settings.vllm_url, "/v1", "/models",
+                settings.nemotron_model, settings.api_key, settings.nemotron_root,
+            ))
         if args.chat or args.both:
             servers.append(Server("Ollama", settings.ollama_url, "", "/api/tags"))
 
