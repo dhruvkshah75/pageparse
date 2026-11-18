@@ -52,6 +52,7 @@ class DocumentJob:
         self.state = "validating"
         self.active_page = None
         self.started = monotonic()
+        self.ended = None
         self.result = {
             "schema_version": 1, "source_name": source.name,
             "source_type": "pdf" if source.suffix.lower() == ".pdf" else "image",
@@ -61,7 +62,7 @@ class DocumentJob:
 
     def progress(self):
         return Progress(self.job_id, self.state, len(self.result["selected_pages"]),
-                        len(self.result["pages"]), self.active_page, monotonic() - self.started)
+                        len(self.result["pages"]), self.active_page, (self.ended or monotonic()) - self.started)
 
     def cancel(self):
         if self.state not in ("validating", "running"):
@@ -92,6 +93,7 @@ class DocumentJob:
             if self.renderer:
                 await self.renderer.close()
             self.task = None
+        self.ended = monotonic()
         self.result["status"] = self.state
         self.active_page = None
         self.report(self.progress())

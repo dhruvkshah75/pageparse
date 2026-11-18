@@ -3,10 +3,13 @@ import asyncio
 from dataclasses import dataclass
 from io import BytesIO
 import math
-import multiprocessing
+from multiprocessing import Pipe
+from multiprocessing.connection import Connection
 from pathlib import Path
 import re
 import stat
+import subprocess
+import sys
 
 from PIL import Image, ImageOps
 
@@ -138,7 +141,7 @@ def pdf_worker(connection):
                     except Exception:
                         connection.send(("error", "render_failed", "The PDF page could not be rendered.", number))
                         return
-                    connection.send(("page", number, image))
+                    connection.send(("page", number, image.png, image.width, image.height))
                     del image, pixmap, page
                 except (EOFError, OSError):
                     return
@@ -147,19 +150,20 @@ def pdf_worker(connection):
 class PdfRenderer:
     """One request at a time over a private, two-way multiprocessing pipe."""
 
-    def __init__(self, target=pdf_worker):
-        self.context = multiprocessing.get_context("spawn")
-        self.target = target
+    def __init__(self, command=None):
+        self.command = command or (sys.executable, "-m", "pageparse.documents")
         self.process = None
         self.connection = None
         self.exchange = None
 
     async def open(self, path: Path):
-        parent, child = self.context.Pipe()
-        process = self.context.Process(target=self.target, args=(child,), daemon=True)
+        parent, child = Pipe()
         try:
-            process.start()
-        except (OSError, RuntimeError):
+            process = subprocess.Popen(
+                (*self.command, str(child.fileno())), pass_fds=(child.fileno(),),
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except (OSError, ValueError):
             parent.close()
             raise ServiceError("render_failed", "Could not start the PDF renderer.") from None
         finally:
@@ -173,7 +177,7 @@ class PdfRenderer:
         reply = await self.request(("render", number), "page")
         if reply[1] != number:
             raise ServiceError("render_failed", "The PDF renderer returned the wrong page.")
-        return reply[2]
+        return PageImage(*reply[2:])
 
     async def request(self, message, expected):
         def exchange():
@@ -202,7 +206,6 @@ class PdfRenderer:
             await asyncio.gather(self.exchange, return_exceptions=True)
             self.exchange = None
         self.connection.close()
-        self.process.close()
         self.process = None
 
     def shutdown(self):
@@ -211,10 +214,17 @@ class PdfRenderer:
             # Keep draining a cancelled render as it exits so its PNG cannot fill the pipe.
         except (EOFError, OSError):
             pass
-        self.process.join(2)
-        if self.process.is_alive():
+        try:
+            self.process.wait(timeout=2)
+            return
+        except subprocess.TimeoutExpired:
             self.process.terminate()
-            self.process.join(1)
-        if self.process.is_alive():
+        try:
+            self.process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
             self.process.kill()
-            self.process.join()
+            self.process.wait()
+
+
+if __name__ == "__main__":
+    pdf_worker(Connection(int(sys.argv[1])))

@@ -18,3 +18,10 @@
 - `python -m pytest -q tests/test_models.py tests/test_documents.py tests/test_jobs.py tests/test_exports.py` passed 59 tests.
 - Verified process exits before staging identity, before content, and after either final link. A second process received a retryable lock error while publication was in progress and recovered the saved pair afterward.
 - Verified no-clobber collisions, unsupported publication, failed rollback with an indexed survivor, trusted-directory enforcement, and deletion with identity and digest checks. Confirmed originals, unrelated files, and unselected formats survive cleanup.
+
+## Stage 4 · Textual workspaces
+
+- Reinstalled the editable client with both launchers. `python -m pytest -q` passed 67 tests. Both `pageparse` and `python -m pageparse` opened the styled Parse workspace with its keyboard footer in a 120×36 pseudo-terminal and exited on Ctrl+Q.
+- Exercised both 80×24 and 120×36 layouts, the file picker, ordered page rendering, all preview formats, explicit export, and confirmed deletion. Verified that a confirmed partial export colliding on disk requires fresh confirmation, and that exports can be managed with both backends offline.
+- Verified keyboard switching during inference, parse and chat cancellation, completed-turn history, incomplete-turn handling, model switching, transcript limits, and discovery refresh.
+- Textual redirects stderr to an object without a usable file descriptor. This interfered with Python's multiprocessing resource tracker when starting the first render. The app now spawns a fresh Python renderer with an explicit private pipe and independent standard streams. Renderer protocol and cancellation escalation tests pass with this entry point.

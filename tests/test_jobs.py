@@ -1,6 +1,9 @@
 import asyncio
 import os
+from multiprocessing.connection import Connection
+from pathlib import Path
 import signal
+import sys
 import time
 
 import pytest
@@ -120,14 +123,14 @@ def child_ignores_termination(connection):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     connection.send(("metadata", 2))
     _, number = connection.recv()
-    connection.send(("page", number, PageImage(bytes([number]), 100 + number, 200)))
+    connection.send(("page", number, bytes([number]), 100 + number, 200))
     connection.recv()
     while True:
         time.sleep(1)
 
 
 def test_unexpected_renderer_exit(tmp_path):
-    job = make_job(tmp_path, pages="", renderer=lambda: PdfRenderer(child_exits))
+    job = make_job(tmp_path, pages="", renderer=lambda: worker_process(child_exits))
     result = asyncio.run(job.run())
     assert result["failure"]["code"] == "render_failed"
     assert result["failure"]["page_number"] == 1
@@ -136,7 +139,7 @@ def test_unexpected_renderer_exit(tmp_path):
 
 def test_cancel_render_reaps_unresponsive_child_before_return(tmp_path):
     async def verify():
-        job = make_job(tmp_path, pages="", renderer=lambda: PdfRenderer(child_ignores_termination))
+        job = make_job(tmp_path, pages="", renderer=lambda: worker_process(child_ignores_termination))
         task = asyncio.create_task(job.run())
         async with asyncio.timeout(6):
             while job.active_page != 2:
@@ -153,3 +156,10 @@ def test_cancel_render_reaps_unresponsive_child_before_return(tmp_path):
             os.kill(pid, 0)
 
     asyncio.run(verify())
+
+def worker_process(target):
+    return PdfRenderer((sys.executable, str(Path(__file__).resolve()), target.__name__))
+
+
+if __name__ == "__main__":
+    globals()[sys.argv[1]](Connection(int(sys.argv[2])))
