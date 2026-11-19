@@ -6,6 +6,10 @@ PageParse is a Linux terminal app for parsing PDFs and images with NVIDIA Nemotr
 
 *The Parse workspace keeps page selection and export settings beside the preview, so you can review the extracted text before copying or exporting it.*
 
+![PageParse Parse workspace showing source, page selection, export settings, pass mode, and filters](docs/pageparse-parse-settings.png)
+
+*Choose a source and page range, then set the export format, pass mode, and filters before parsing.*
+
 ## Install and run
 
 Install Git, curl, Go 1.25.8 or later, and Python 3.12 with virtual environment support. On Ubuntu, the virtual environment support is packaged as `python3.12-venv`.
