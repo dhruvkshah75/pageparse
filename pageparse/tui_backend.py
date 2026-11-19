@@ -126,6 +126,7 @@ class BackendSession:
             source = local_path(request["source"])
         self.job = DocumentJob(
             request["id"], source, request["pages"], self.settings.nemotron_model, self.nemotron,
+            mode=request.get("pass_mode", "single"),
             report=lambda progress: self.emit("progress", **asdict(progress)),
         )
         self.result = await self.job.run()

@@ -206,6 +206,8 @@ func (m *model) choose(d *dialog, item choice) {
 	switch d.kind {
 	case format:
 		m.format = item.value
+	case passMode:
+		m.passMode = item.value
 	case previewMode:
 		if item.value != m.previewMode {
 			m.previewMode, m.previewRaw = item.value, ""

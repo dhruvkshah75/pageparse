@@ -30,7 +30,7 @@ class FixtureModel:
         self.calls = []
         self.error = error
 
-    async def parse(self, png, width, height):
+    async def parse(self, png, width, height, *, mode="single"):
         number = png[0]
         self.calls.append(number)
         assert width == 100 + number and height == 200
@@ -86,7 +86,7 @@ def test_cancel_inference_ignores_late_results(tmp_path):
         request_closed = asyncio.Event()
 
         class LateModel(FixtureModel):
-            async def parse(self, png, width, height):
+            async def parse(self, png, width, height, *, mode="single"):
                 if png[0] == 3:
                     entered.set()
                     try:

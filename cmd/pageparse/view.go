@@ -13,17 +13,18 @@ import (
 )
 
 const (
-	canvasHex   = "#1f1e1b"
-	surfaceHex  = "#252320"
-	outputHex   = "#181715"
-	textHex     = "#faf9f5"
-	mutedHex    = "#a09d96"
-	coralHex    = "#cc785c"
-	onCoralHex  = "#141413"
-	hairlineHex = "#4b443d"
-	amberHex    = "#e8a55a"
-	formLabel   = 9
-	formIndent  = 2 + formLabel
+	canvasHex       = "#1f1e1b"
+	surfaceHex      = "#252320"
+	outputHex       = "#181715"
+	textHex         = "#faf9f5"
+	mutedHex        = "#a09d96"
+	coralHex        = "#cc785c"
+	onCoralHex      = "#141413"
+	hairlineHex     = "#4b443d"
+	amberHex        = "#e8a55a"
+	formLabel       = 9
+	formIndent      = 2 + formLabel
+	parseFormHeight = 10
 )
 
 var (
@@ -67,7 +68,7 @@ func (m *model) resize() {
 	m.preview.SetWidth(max(1, l.viewer-4))
 	previewHeight := l.height
 	if !l.split && !l.short {
-		previewHeight -= 9
+		previewHeight -= parseFormHeight
 	}
 	if m.previewRaw == "" {
 		previewHeight = min(previewHeight, 6)
@@ -234,7 +235,7 @@ func (m *model) keyHint() string {
 			return "↑↓ Move  Tab Next  F5 Parse  F8 Paste image  F9 Copy"
 		}
 		return "↑↓ Move  Tab Next  F9 Copy"
-	case browse, format:
+	case browse, format, passMode:
 		return "↑↓ Move  ↵ Open  Tab Next  F9 Copy"
 	case parseStart, parseStop, export:
 		return "↑ ← → Move  ↵ Activate  Tab Next"
@@ -317,6 +318,7 @@ func (m *model) formView(width, height int, area hitArea) string {
 		return line
 	}
 	browseButton := m.button(browse, "Browse files", false)
+	passLabel, _, _ := strings.Cut(choiceLabel(passModes, m.passMode), " · ")
 	lines := []formLine{
 		{text: lipText.Bold(true).Render("Document")},
 		row(source, m.input(source, "Source", width)),
@@ -325,6 +327,7 @@ func (m *model) formView(width, height int, area hitArea) string {
 		row(pages, m.input(pages, "Pages", width)),
 		row(destination, m.input(destination, "Output", width)),
 		row(format, "  "+lipMuted.Render(fmt.Sprintf("%-*s", formLabel, "Format"))+m.button(format, choiceLabel(outputFormats, m.format)+" ▾", false)),
+		row(passMode, "  "+lipMuted.Render(fmt.Sprintf("%-*s", formLabel, "Pass mode"))+m.button(passMode, passLabel+" ▾", false)),
 		{},
 		buttons([]control{parseStart, parseStop, export}, []string{"Start", "Cancel", "Export"}),
 	}
@@ -341,7 +344,7 @@ func (m *model) formView(width, height int, area hitArea) string {
 			}
 		}
 	}
-	if active == 7 && m.total > 0 && height > 1 {
+	if m.total > 0 && active == len(lines)-2 && height > 1 {
 		active++
 	}
 	offset := min(max(0, active-height+1), max(0, len(lines)-height))
@@ -364,7 +367,7 @@ func (m *model) parseView(l layout, area hitArea) string {
 	if l.split {
 		viewerArea = area.offset(l.form+2, 0)
 	} else if !l.short {
-		viewerArea = area.offset(0, 9)
+		viewerArea = area.offset(0, parseFormHeight)
 	}
 	label := m.button(previewMode, choiceLabel(previewModes, m.previewMode)+" ▾", false)
 	viewerArea.add(0, 0, l.viewer, m.preview.Height()+3, preview)
@@ -384,7 +387,7 @@ func (m *model) parseView(l layout, area hitArea) string {
 	if l.short {
 		return viewer
 	}
-	form := lipgloss.NewStyle().Height(9).Render(m.formView(l.form, 9, area))
+	form := lipgloss.NewStyle().Height(parseFormHeight).Render(m.formView(l.form, parseFormHeight, area))
 	return form + "\n" + viewer
 }
 

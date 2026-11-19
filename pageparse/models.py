@@ -7,15 +7,18 @@ import json
 import math
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from io import BytesIO
 from pathlib import Path
 from threading import Lock
 
 import httpx
+from PIL import Image
 
 from .config import Settings, endpoint_label
 
 PROMPT = "</s><s><predict_bbox><predict_classes><output_markdown><predict_text_in_pic>"
+PASS_MODES = ("single", "double", "triple")
 # Add only forms observed on a live empty page.
 BLANK_COMPLETIONS = frozenset({""})
 _COORD = r"[0-9]+(?:\.[0-9]+)?"
@@ -128,6 +131,13 @@ def postprocess(raw, width, height, helper):
         return {"markdown": "", "blocks": [], "warnings": [], "coordinate_frame": "content_normalized"}
     try:
         payload = helper(raw, image_size=(width, height))
+    except Exception:
+        raise ServiceError("postprocess_failed", "NVIDIA postprocessing failed for this page.") from None
+    return page_payload(payload)
+
+
+def page_payload(payload):
+    try:
         if not payload["blocks"] or not isinstance(payload["markdown"], str):
             raise ValueError
         blocks = []
@@ -223,8 +233,67 @@ class Nemotron(Backend):
                 return Discovery("helper unavailable", self.endpoint, str(error), result.models)
         return result
 
-    async def parse(self, png: bytes, width: int, height: int):
+    async def parse(self, png: bytes, width: int, height: int, *, mode="single"):
         helper = await run_sync(self.get_helper)
+        raw = await self.complete(png, width, height)
+        if mode == "single" or not validate_layout(raw):
+            return await run_sync(postprocess, raw, width, height, helper)
+        return await self.refine(png, raw, mode)
+
+    async def refine(self, png, raw, mode):
+        try:
+            from nemotron_parse.inference import DocumentParser, GenerationSettings
+        except ImportError:
+            raise ServiceError("model_unavailable", "Update the NVIDIA helper to use double or triple pass.") from None
+
+        loop = asyncio.get_running_loop()
+        active = None
+        cancelled = False
+
+        async def request_stage(png, size, prompt, settings):
+            nonlocal active
+            if cancelled:
+                raise asyncio.CancelledError
+            active = asyncio.current_task()
+            try:
+                refined = await self.complete(png, *size, prompt, asdict(settings))
+                return refined if validate_layout(refined) else "<s></s>"
+            finally:
+                active = None
+
+        def generate(image, *, prompt, stage, settings):
+            if stage == "fullpage":
+                return raw
+            stream = BytesIO()
+            image.save(stream, format="PNG")
+            return asyncio.run_coroutine_threadsafe(
+                request_stage(stream.getvalue(), image.size, prompt, settings), loop,
+            ).result()
+
+        def parse_page():
+            limit = self.settings.max_tokens
+            with Image.open(BytesIO(png)) as image, DocumentParser(
+                backend=generate,
+                detection=GenerationSettings(max_tokens=min(limit, 4096)),
+                crop=GenerationSettings(max_tokens=limit, temperature=0.1, repetition_penalty=1.0),
+            ) as parser:
+                return page_payload(parser.parse(image, mode=mode))
+
+        worker = asyncio.create_task(asyncio.to_thread(parse_page))
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled = True
+            if active is not None:
+                active.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+            raise
+        except ServiceError:
+            raise
+        except Exception:
+            raise ServiceError("postprocess_failed", "NVIDIA refinement failed for this page.") from None
+
+    async def complete(self, png, width, height, prompt=PROMPT, generation=None):
         model = self.settings.nemotron_model
         data_url = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
         payload = {
@@ -232,10 +301,12 @@ class Nemotron(Backend):
             "repetition_penalty": 1.1, "skip_special_tokens": False,
             "max_tokens": self.settings.max_tokens,
             "messages": [{"role": "user", "content": [
-                {"type": "text", "text": PROMPT},
+                {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": data_url}},
             ]}],
         }
+        if generation is not None:
+            payload.update(generation)
         try:
             async with self.client() as client:
                 response = await client.post(self.url + "/chat/completions", json=payload)
@@ -254,8 +325,7 @@ class Nemotron(Backend):
             body = response.json()
         except ValueError:
             body = None
-        raw = completion_content(body)
-        return await run_sync(postprocess, raw, width, height, helper)
+        return completion_content(body)
 
 
 class Ollama(Backend):

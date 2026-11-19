@@ -6,7 +6,7 @@ from pathlib import Path
 from time import monotonic
 
 from .documents import PageImage, PdfRenderer, normalize_image, select_pages, source_type
-from .models import ServiceError, run_sync
+from .models import PASS_MODES, ServiceError, run_sync
 from .preview import render_tables
 
 MAX_RESULT_BYTES = 32 * 1024 * 1024
@@ -39,11 +39,14 @@ def markdown_result(result):
 class DocumentJob:
     def __init__(self, job_id, source: Path | PageImage, pages, model, adapter, *,
                  report=lambda progress: None, renderer_factory=PdfRenderer,
-                 result_budget=MAX_RESULT_BYTES):
+                 result_budget=MAX_RESULT_BYTES, mode="single"):
+        if mode not in PASS_MODES:
+            raise ServiceError("invalid_mode", "Choose single, double, or triple pass.")
         self.job_id = job_id
         self.source = source
         self.range = pages
         self.adapter = adapter
+        self.mode = mode
         self.report = report
         self.renderer_factory = renderer_factory
         self.result_budget = result_budget
@@ -58,7 +61,7 @@ class DocumentJob:
         self.result = {
             "schema_version": 1, "source_name": source.name if is_path else "clipboard-image.png",
             "source_type": "pdf" if is_path and source.suffix.lower() == ".pdf" else "image",
-            "model": model, "status": None, "selected_pages": [],
+            "model": model, "pass_mode": mode, "status": None, "selected_pages": [],
             "pages": [], "failure": None,
         }
 
@@ -125,7 +128,9 @@ class DocumentJob:
             image = await self.renderer.render(number) if self.renderer else direct_image
             if self.state == "cancelled":
                 return
-            self.request = asyncio.create_task(self.adapter.parse(image.png, image.width, image.height))
+            self.request = asyncio.create_task(
+                self.adapter.parse(image.png, image.width, image.height, mode=self.mode)
+            )
             width, height = image.width, image.height
             del image, direct_image
             direct_image = None

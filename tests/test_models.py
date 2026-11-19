@@ -62,6 +62,79 @@ def test_nemotron_request_and_coordinates():
     assert "raw_out" not in payload
 
 
+@pytest.mark.parametrize("mode,stages", [
+    ("single", ["page"]),
+    ("double", ["page", "crop"]),
+    ("triple", ["page", "detect", "crop", "crop"]),
+])
+def test_nemotron_pass_modes(mode, stages):
+    settings = Settings.from_env()
+    if not (settings.helpers / "nemotron_parse/inference.py").is_file():
+        pytest.skip("The NVIDIA multipass helper is not installed.")
+    table = "<x_0.1><y_0.4>Original table<x_0.8><y_0.6><class_Table>"
+    detected = "<x_0.1><y_0.7><x_0.8><y_0.9><class_Table>"
+    crop = "<x_0.1><y_0.1>Refined value<x_0.9><y_0.9><class_Table>"
+    calls = []
+
+    def route(request):
+        body = json.loads(request.content)
+        parts = body["messages"][0]["content"]
+        assert body["max_tokens"] <= settings.max_tokens
+        wire_image = parts[1]["image_url"]["url"].split(",", 1)[1]
+        with Image.open(io.BytesIO(base64.b64decode(wire_image))) as image:
+            size = image.size
+        if "<output_no_text>" in parts[0]["text"]:
+            assert size == (100, 200)
+            stage, raw = "detect", detected
+        elif size == (100, 200):
+            stage, raw = "page", BLOCK + "\n" + table
+        else:
+            stage, raw = "crop", crop
+        calls.append(stage)
+        return httpx.Response(200, json={"choices": [
+            {"finish_reason": "stop", "message": {"content": raw}},
+        ]})
+
+    model = Nemotron(settings, httpx.MockTransport(route))
+    result = asyncio.run(model.parse(png(), 100, 200, mode=mode))
+    assert calls == stages
+    assert "# Example" in result["markdown"]
+    assert ("Refined value" in result["markdown"]) == (mode != "single")
+    if mode == "triple":
+        assert any(block["bbox"][1] > .6 for block in result["blocks"])
+
+
+def test_cancel_nemotron_detection():
+    settings = Settings.from_env()
+    if not (settings.helpers / "nemotron_parse/inference.py").is_file():
+        pytest.skip("The NVIDIA multipass helper is not installed.")
+
+    async def run():
+        entered = asyncio.Event()
+        closed = asyncio.Event()
+
+        async def route(request):
+            if "<output_no_text>" in json.loads(request.content)["messages"][0]["content"][0]["text"]:
+                entered.set()
+                try:
+                    await asyncio.Future()
+                finally:
+                    closed.set()
+            return httpx.Response(200, json={"choices": [
+                {"finish_reason": "stop", "message": {"content": BLOCK}},
+            ]})
+
+        model = Nemotron(settings, httpx.MockTransport(route))
+        task = asyncio.create_task(model.parse(png(), 100, 200, mode="triple"))
+        await asyncio.wait_for(entered.wait(), 3)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 3)
+        assert closed.is_set()
+
+    asyncio.run(run())
+
+
 def test_discovery_failure_missing_and_recovery():
     responses = iter([None, ["nemotron-parse-v2"], ["nemotron-parse"]])
 

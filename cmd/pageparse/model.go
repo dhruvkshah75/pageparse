@@ -22,6 +22,7 @@ const (
 	pages         control = "pages"
 	destination   control = "destination"
 	format        control = "format"
+	passMode      control = "pass mode"
 	parseStart    control = "parse start"
 	parseStop     control = "parse stop"
 	export        control = "export"
@@ -42,7 +43,7 @@ const (
 var workspacesByKey = map[string]string{"f1": "parse", "f2": "chat", "f3": "exports"}
 
 var workspaceControls = map[string][]control{
-	"parse":   {source, browse, pages, destination, format, parseStart, parseStop, export, previewMode, preview},
+	"parse":   {source, browse, pages, destination, format, passMode, parseStart, parseStop, export, previewMode, preview},
 	"chat":    {chatModel, newChat, transcript, prompt, send, chatStop},
 	"exports": {exportList, exportDetails, deleteFiles},
 }
@@ -51,6 +52,8 @@ type choice struct{ label, value string }
 
 var outputFormats = []choice{{"Markdown + JSON", "both"}, {"Markdown", "md"}, {"JSON", "json"}}
 var previewModes = []choice{{"Rendered", "rendered"}, {"Markdown", "markdown"}, {"JSON", "json"}}
+var passModes = []choice{{"Single · fast preview", "single"}, {"Double · refine tables and charts", "double"},
+	{"Triple · detect and refine tables and charts", "triple"}}
 
 type dialog struct {
 	title, subtitle           string
@@ -94,7 +97,7 @@ type model struct {
 	stopping, exporting, deleting, indexReady bool
 	clipboard, pasting                        bool
 	sourceRevision                            int
-	format, previewMode                       string
+	format, previewMode, passMode             string
 	previewRaw                                string
 	previewRevision, previewPending           int
 	renderWidth                               int
@@ -113,7 +116,7 @@ func newModel(b *backend, workspace string) *model {
 		backend: b, width: 80, height: 24, workspace: workspace,
 		inputs: make(map[control]*textinput.Model), feedback: make(map[string]string),
 		connections: make(map[string]connection), selection: make(map[string]bool),
-		format: "both", previewMode: "rendered",
+		format: "both", previewMode: "rendered", passMode: "single",
 		preview: viewport.New(), transcript: viewport.New(), details: viewport.New(),
 		prompt: textarea.New(),
 	}
@@ -518,7 +521,7 @@ func parseArrowFocus(current control, key string) control {
 	controls := workspaceControls["parse"]
 	index := slices.Index(controls, current)
 	switch current {
-	case source, browse, pages, destination, format:
+	case source, browse, pages, destination, format, passMode:
 		if key == "down" {
 			return controls[index+1]
 		}
@@ -528,7 +531,7 @@ func parseArrowFocus(current control, key string) control {
 	case parseStart, parseStop, export:
 		switch key {
 		case "up":
-			return format
+			return passMode
 		case "left":
 			if current != parseStart {
 				return controls[index-1]
@@ -583,6 +586,8 @@ func (m *model) activate() tea.Cmd {
 		m.openBrowser(m.browseStart())
 	case format:
 		m.openMenu(format, "Export format", outputFormats, m.format)
+	case passMode:
+		m.openMenu(passMode, "Nemotron pass mode", passModes, m.passMode)
 	case previewMode:
 		m.openMenu(previewMode, "Preview mode", previewModes, m.previewMode)
 	case chatModel:
@@ -632,7 +637,7 @@ func (m *model) startParse() {
 	m.preview.GotoTop()
 	m.feedback["parse"] = ""
 	m.submit(request{"op": "parse", "id": m.jobID, "clipboard": m.clipboard,
-		"source": m.inputs[source].Value(), "pages": m.inputs[pages].Value()})
+		"source": m.inputs[source].Value(), "pages": m.inputs[pages].Value(), "pass_mode": m.passMode})
 }
 
 func (m *model) stop() {
