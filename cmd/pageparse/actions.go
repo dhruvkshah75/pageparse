@@ -184,6 +184,14 @@ func moveIndex(current int, key string, last, pageSize int) int {
 }
 
 func (m *model) choose(d *dialog, item choice) {
+	if d.kind == mdFilters {
+		if m.hiddenElements[item.value] {
+			delete(m.hiddenElements, item.value)
+		} else {
+			m.hiddenElements[item.value] = true
+		}
+		return
+	}
 	if d.kind == browse {
 		if info, err := os.Stat(item.value); err == nil && info.IsDir() {
 			m.openBrowser(item.value)

@@ -24,7 +24,7 @@ const (
 	amberHex        = "#e8a55a"
 	formLabel       = 9
 	formIndent      = 2 + formLabel
-	parseFormHeight = 10
+	parseFormHeight = 11
 )
 
 var (
@@ -235,7 +235,7 @@ func (m *model) keyHint() string {
 			return "↑↓ Move  Tab Next  F5 Parse  F8 Paste image  F9 Copy"
 		}
 		return "↑↓ Move  Tab Next  F9 Copy"
-	case browse, format, passMode:
+	case browse, format, passMode, mdFilters:
 		return "↑↓ Move  ↵ Open  Tab Next  F9 Copy"
 	case parseStart, parseStop, export:
 		return "↑ ← → Move  ↵ Activate  Tab Next"
@@ -319,6 +319,10 @@ func (m *model) formView(width, height int, area hitArea) string {
 	}
 	browseButton := m.button(browse, "Browse files", false)
 	passLabel, _, _ := strings.Cut(choiceLabel(passModes, m.passMode), " · ")
+	filterLabel := "Show all"
+	if count := len(m.hiddenElements); count > 0 {
+		filterLabel = fmt.Sprintf("%d hidden", count)
+	}
 	lines := []formLine{
 		{text: lipText.Bold(true).Render("Document")},
 		row(source, m.input(source, "Source", width)),
@@ -328,6 +332,7 @@ func (m *model) formView(width, height int, area hitArea) string {
 		row(destination, m.input(destination, "Output", width)),
 		row(format, "  "+lipMuted.Render(fmt.Sprintf("%-*s", formLabel, "Format"))+m.button(format, choiceLabel(outputFormats, m.format)+" ▾", false)),
 		row(passMode, "  "+lipMuted.Render(fmt.Sprintf("%-*s", formLabel, "Pass mode"))+m.button(passMode, passLabel+" ▾", false)),
+		row(mdFilters, "  "+lipMuted.Render(fmt.Sprintf("%-*s", formLabel, "Filters"))+m.button(mdFilters, filterLabel+" ▾", false)),
 		{},
 		buttons([]control{parseStart, parseStop, export}, []string{"Start", "Cancel", "Export"}),
 	}
@@ -583,7 +588,15 @@ func (m *model) renderDialog(area hitArea) string {
 	} else {
 		start := listOffset(d.cursor, len(d.choices), rows)
 		for index := start; index < min(len(d.choices), start+rows); index++ {
-			opt := oneLine(d.choices[index].label)
+			item := d.choices[index]
+			opt := oneLine(item.label)
+			if d.kind == mdFilters {
+				check := "[ ] "
+				if m.hiddenElements[item.value] {
+					check = "[x] "
+				}
+				opt = check + opt
+			}
 			*area.hits = append(*area.hits, hit{x: area.x, y: area.y + len(lines), width: width,
 				height: 1, target: dialogBody, option: index})
 			if index == d.cursor {
@@ -596,6 +609,9 @@ func (m *model) renderDialog(area hitArea) string {
 			lines = append(lines, "No documents in this folder.")
 		}
 		hint := "↑↓ Move   ↵ Choose   Esc Back"
+		if d.kind == mdFilters {
+			hint = "Space Toggle  Esc Done"
+		}
 		if d.kind == browse && width >= 41 {
 			hint = "↑↓ Move   ↵ Open   ← Parent   ~ Home   Esc Back"
 		}

@@ -248,9 +248,10 @@ class ExportStore:
             return True
         return False
 
-    def publish(self, result, proposal):
+    def publish(self, result, proposal, hidden=()):
         if not result["pages"] or result["status"] not in ("complete", "failed", "cancelled"):
             raise ExportError("Generate at least one page before exporting.")
+        markdown = markdown_result(result, hidden) if hidden and "md" in proposal.formats else None
         try:
             with self.locked() as db, directory(proposal.parent) as fd:
                 current = os.fstat(fd)
@@ -260,11 +261,11 @@ class ExportStore:
                 if not all(self.available(db, fd, path) for path in proposal.paths):
                     return Publication("collision", proposal=self.candidate(db, fd, proposal.parent, result, proposal.formats),
                                        message="An output path became occupied. Review the new paths.")
-                return self.write_files(db, fd, result, proposal)
+                return self.write_files(db, fd, result, proposal, markdown)
         except OSError:
             raise ExportError("The output directory is unavailable. Check its path and permissions.") from None
 
-    def write_files(self, db, fd, result, proposal):
+    def write_files(self, db, fd, result, proposal, markdown):
         group_id = uuid4().hex
         formats = proposal.formats
         group = (group_id, time(), result["source_name"], str(proposal.parent), *proposal.identity, len(formats))
@@ -282,7 +283,8 @@ class ExportStore:
 
         try:
             for fmt, stage in zip(formats, stages):
-                self.write_stage(db, fd, group_id, fmt, stage, SERIALIZERS[fmt], result)
+                serialize = (lambda _: markdown) if fmt == "md" and markdown is not None else SERIALIZERS[fmt]
+                self.write_stage(db, fd, group_id, fmt, stage, serialize, result)
             for row in self.files(db, group_id):
                 if verify(fd, row["staging"], (row["stage_dev"], row["stage_ino"]), row, stage=True) != "verified":
                     raise OSError

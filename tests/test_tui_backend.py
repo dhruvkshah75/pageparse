@@ -6,6 +6,7 @@ import json
 import httpx
 from PIL import Image
 import pymupdf
+import pytest
 
 from pageparse.config import Settings
 from pageparse.models import Nemotron, Ollama
@@ -38,6 +39,7 @@ class FixtureServices:
         self.vllm_state = "ready"
         self.ollama_state = "ready"
         self.sizes = []
+        self.raw = RAW
         self.block_page = None
         self.parse_waiting = asyncio.Event()
         self.parse_closed = False
@@ -86,7 +88,7 @@ class FixtureServices:
                     finally:
                         self.parse_closed = True
                 return httpx.Response(200, json={"choices": [
-                    {"finish_reason": "stop", "message": {"content": RAW}},
+                    {"finish_reason": "stop", "message": {"content": self.raw}},
                 ]})
             case "/api/chat":
                 self.chat_bodies.append(json.loads(request.content))
@@ -199,6 +201,57 @@ def test_cancel_parse_and_confirm_partial_export(tmp_path):
             assert len(group["files"]) == 1
         finally:
             await reopened.close()
+
+    asyncio.run(run())
+
+
+def test_markdown_filters_keep_json_and_use_confirmed_selection(tmp_path):
+    settings = Settings.from_env()
+    if not (settings.helpers / "nemotron_parse/inference.py").is_file():
+        pytest.skip("The NVIDIA helper with Markdown rendering is not installed.")
+    path = tmp_path / "example.png"
+    Image.new("RGB", (100, 200)).save(path)
+
+    async def run():
+        fixture = FixtureServices()
+        fixture.raw = "\n".join(
+            f"<x_0.1><y_0.{n}>{body}<x_0.9><y_0.{n + 1}><class_{role}>"
+            for n, (role, body) in enumerate([
+                ("Page-header", "Shared words"),
+                ("Title", "Heading"),
+                ("Text", "Shared words"),
+                ("Table", "<table><tr><th>Data</th></tr><tr><td>42</td></tr></table>"),
+                ("Footnote", "Saved footnote"),
+                ("Page-footer", "Remove this footer"),
+            ], 1)
+        )
+        session = fixture.session(tmp_path)
+        session.nemotron = Nemotron(settings, httpx.MockTransport(fixture.route))
+        try:
+            await request(session, "parse", id=1, clipboard=False, source=str(path), pages="all")
+            await request(session, "preview", mode="markdown", revision=1)
+            assert fixture.last("preview")["content"].count("Shared words") == 2
+
+            session.result["status"] = "cancelled"
+            await request(session, "export", destination="", format="both",
+                          hidden_elements=["Page-header", "Page-footer"])
+            assert "Hidden in Markdown: Page-header, Page-footer" in fixture.last("export_confirm")["details"]
+            await request(session, "export_accept", hidden_elements=["Footnote"])
+
+            output = session.default_destination
+            markdown = (output / "example.partial.md").read_text()
+            assert markdown.count("Shared words") == 1
+            assert "# Heading" in markdown and "| Data |" in markdown
+            assert "Saved footnote" in markdown and "Remove this footer" not in markdown
+            assert json.loads((output / "example.partial.json").read_text()) == session.result
+
+            session.result["status"] = "complete"
+            await request(session, "export", destination="", format="md", hidden_elements=["Footnote"])
+            markdown = (output / "example.md").read_text()
+            assert "Saved footnote" not in markdown and "Remove this footer" in markdown
+            assert markdown.count("Shared words") == 2
+        finally:
+            await session.close()
 
     asyncio.run(run())
 

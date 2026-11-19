@@ -36,15 +36,16 @@ Mouse wheel / ↑ / ↓ / Page Up / Page Down  Scroll Help
 Home / End  Jump to the beginning or end of Help
 
 PARSE
-↑ / ↓  Move between Source, Browse files, Pages, Output, Format, Pass mode and Start
+↑ / ↓  Move between Source, Browse files, Pages, Output, Format, Pass mode, Filters and Start
 ← / →  Move between Start, Cancel and Export on the action row
-↑  Return from the action row to Pass mode
+↑  Return from the action row to Filters
 Source  Enter a path, paste it, or choose Browse files. Supports PDF, PNG, JPEG and WebP.
 Browse files  Enter, Space or → opens the selected folder or file. ← or Backspace goes to the parent folder. ~ goes to your home folder.
 Pages  Enter all, leave it blank, or enter a selection such as 1,3-5.
 Output  Enter the export directory.
 Format  Press Enter, then use ↑ / ↓ to choose Markdown + JSON, Markdown or JSON.
 Pass mode  Select Single for a fast whole-page parse, Double to refine predicted tables and charts, or Triple to also run separate layout detection.
+Filters  Open with Alt+M or focus Filters and press Enter. Use ↑ / ↓ to move and Space to toggle which page headers, page footers and footnotes to hide in Markdown exports. Press Esc when done.
 Preview  Use Tab or click to focus the preview or its mode menu. Choose Rendered, Markdown or JSON.
 Ctrl+V in Source  Paste a clipboard image or fall back to clipboard text.
 

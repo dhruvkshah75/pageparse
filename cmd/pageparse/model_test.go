@@ -86,8 +86,9 @@ func TestParseArrowNavigation(t *testing.T) {
 	}{
 		{tea.KeyDown, browse}, {tea.KeyUp, source}, {tea.KeyDown, browse},
 		{tea.KeyDown, pages}, {tea.KeyDown, destination}, {tea.KeyDown, format},
-		{tea.KeyDown, passMode}, {tea.KeyDown, parseStart}, {tea.KeyRight, parseStop}, {tea.KeyRight, export},
-		{tea.KeyLeft, parseStop}, {tea.KeyUp, passMode}, {tea.KeyUp, format}, {tea.KeyUp, destination},
+		{tea.KeyDown, passMode}, {tea.KeyDown, mdFilters}, {tea.KeyDown, parseStart},
+		{tea.KeyRight, parseStop}, {tea.KeyRight, export}, {tea.KeyLeft, parseStop},
+		{tea.KeyUp, mdFilters}, {tea.KeyUp, passMode}, {tea.KeyUp, format}, {tea.KeyUp, destination},
 	}
 	for _, step := range steps {
 		press(m, step.key)
@@ -115,6 +116,36 @@ func TestPassModeAppliesToParseRequest(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected a parse request")
+	}
+}
+
+func TestMarkdownFiltersApplyToExportRequest(t *testing.T) {
+	b := &backend{requests: make(chan request, 1)}
+	m := newModel(b, "parse")
+	m.completed, m.indexReady = 1, true
+	m.Update(tea.KeyPressMsg{Code: 'm', Mod: tea.ModAlt})
+	if m.dialog == nil || m.dialog.kind != mdFilters {
+		t.Fatal("Alt+M should open Markdown filters")
+	}
+	press(m, tea.KeySpace)
+	press(m, tea.KeyDown)
+	press(m, tea.KeySpace)
+	press(m, tea.KeyDown)
+	press(m, tea.KeySpace)
+	press(m, tea.KeySpace)
+	if !strings.Contains(ansi.Strip(m.View().Content), "[x] Page footer") {
+		t.Fatal("the filter menu should show which blocks are hidden")
+	}
+	press(m, tea.KeyEsc)
+	press(m, tea.KeyF7)
+	select {
+	case req := <-b.requests:
+		hidden, ok := req["hidden_elements"].([]string)
+		if req["op"] != "export" || !ok || strings.Join(hidden, ",") != "Page-header,Page-footer" {
+			t.Fatalf("unexpected export request: %v", req)
+		}
+	default:
+		t.Fatal("expected an export request")
 	}
 }
 

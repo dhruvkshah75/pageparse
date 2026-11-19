@@ -95,9 +95,13 @@ The TUI uses a warm charcoal palette with coral controls and cream text.
 
 **Parse.** Browse or paste a path to a text or scanned PDF, PNG, JPEG, or WebP. Enter `all`, leave Pages blank, or enter a range such as `1,3-5`. Press **F8** to paste an image. On Wayland, install `wl-clipboard` if your desktop blocks the clipboard reader.
 
+**Pass mode.** Choose **Single** for a fast whole-page parse, **Double** to refine predicted tables and charts, or **Triple** to add separate layout detection before refinement. Double and Triple require the NVIDIA multipass helper.
+
 **Copy.** **F9** copies the full output, including off-screen text. In Rendered mode it copies the underlying Markdown. Move focus into a preview or transcript to scroll with **↑/↓** or **Page Up/Page Down**. Copy uses `wl-copy` on Wayland, `xclip` on X11, or OSC 52 when the terminal supports it. To select a portion of visible text, hold **Shift** while dragging in terminals that support bypassing app mouse handling.
 
 **Export.** Choose Markdown, JSON, or both beside the output directory. The default destination is `outputs/` in the launch directory. Markdown uses pipe tables, and JSON preserves the original table spans and pixel coordinates. Partial results require confirmation and use `.partial` filenames. The app never overwrites an existing path.
+
+Open **Filters** or press **Alt+M** in Parse. Use **Space** to toggle **Page header**, **Page footer**, and **Footnote**, then press **Esc** to return. Filters apply to the Markdown file when you export. The preview and JSON retain all parsed blocks.
 
 **Clean up.** Open Exports and press **Space** to select groups. Choose which files to delete and confirm their paths. Exports refreshes after deletion and checks for external deletions while the tab is open. Cleanup verifies the files it created and requires a directory owned by you without group or other write access. For an existing group-writable `outputs/`, run `chmod go-w outputs` from the checkout.
 

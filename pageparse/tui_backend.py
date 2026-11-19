@@ -11,7 +11,7 @@ import traceback
 from .clipboard import read_clipboard_image
 from .config import Settings, endpoint_label
 from .exports import ExportError, ExportStore, FORMATS
-from .jobs import DocumentJob, markdown_result, pretty_json
+from .jobs import DocumentJob, MARKDOWN_FILTERS, markdown_result, pretty_json
 from .launcher import Server, start_backends, stop_owned, stop_reused_nemotron
 from .models import Nemotron, Ollama, ServiceError, run_sync
 from .preview import render_preview
@@ -184,29 +184,35 @@ class BackendSession:
             if destination == self.default_destination:
                 await run_sync(lambda: destination.mkdir(mode=0o700, exist_ok=True))
             formats = FORMATS if request["format"] == "both" else (request["format"],)
+            hidden = request.get("hidden_elements", [])
+            if not isinstance(hidden, list) or any(value not in MARKDOWN_FILTERS for value in hidden):
+                raise ExportError("Choose supported Markdown element filters.")
+            hidden = tuple(value for value in MARKDOWN_FILTERS if value in hidden and "md" in formats)
             proposal = await run_sync(self.store.plan, result, destination, formats)
             if result["status"] != "complete" or not proposal.trusted:
-                self.confirm_export(result, proposal)
+                self.confirm_export(result, proposal, hidden)
                 return
         elif self.proposal:
-            result, proposal = self.proposal
+            result, proposal, hidden = self.proposal
         else:
             raise ExportError("This export proposal has expired. Try exporting again.")
 
         self.proposal = None
-        publication = await run_sync(self.store.publish, result, proposal)
+        publication = await run_sync(self.store.publish, result, proposal, hidden)
         if publication.status == "collision":
-            self.confirm_export(result, publication.proposal, publication.message)
+            self.confirm_export(result, publication.proposal, hidden, publication.message)
             return
         details = [publication.status.capitalize(), publication.message, *map(str, publication.paths),
                    *(f"Staging · {path}" for path in publication.staging)]
         self.emit("export_done", message="\n".join(filter(None, details)))
         self.launch_task("index", self.index, {})
 
-    def confirm_export(self, result, proposal, message=""):
-        self.proposal = result, proposal
+    def confirm_export(self, result, proposal, hidden, message=""):
+        self.proposal = result, proposal, hidden
         title = "Export partial result?" if result["status"] != "complete" else "Confirm output paths"
         details = [message, *map(str, proposal.paths)]
+        if hidden:
+            details.append("Hidden in Markdown: " + ", ".join(hidden))
         if not proposal.trusted:
             details.append("This directory is outside the cleanup boundary. Staging files may require manual removal.")
         self.emit("export_confirm", title=title, details=list(filter(None, details)))

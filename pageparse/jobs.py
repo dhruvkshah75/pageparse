@@ -1,6 +1,7 @@
 """Sequential document inference and serializable results."""
 import asyncio
 from dataclasses import dataclass
+from decimal import Decimal
 import json
 from pathlib import Path
 from time import monotonic
@@ -10,6 +11,7 @@ from .models import PASS_MODES, ServiceError, run_sync
 from .preview import render_tables
 
 MAX_RESULT_BYTES = 32 * 1024 * 1024
+MARKDOWN_FILTERS = ("Page-header", "Page-footer", "Footnote")
 
 
 @dataclass(frozen=True)
@@ -26,8 +28,25 @@ def pretty_json(result):
     return json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2) + "\n"
 
 
-def markdown_result(result):
-    sections = [f"<!-- Page {page['page_number']} -->\n\n{render_tables(page['markdown']).rstrip()}"
+def page_markdown(page, hidden):
+    blocks = page["blocks"] if hidden else ()
+    if not any(block["class"] in hidden for block in blocks):
+        return page["markdown"]
+    try:
+        from nemotron_parse import render_markdown
+    except ImportError:
+        raise ServiceError("postprocess_failed", "Update the NVIDIA helper to use Markdown filters.") from None
+
+    raw = []
+    for block in blocks:
+        if block["class"] not in hidden:
+            x1, y1, x2, y2 = (format(Decimal(str(value)), "f") for value in block["bbox"])
+            raw.append(f"<x_{x1}><y_{y1}>{block['text']}<x_{x2}><y_{y2}><class_{block['class']}>")
+    return render_markdown("\n".join(raw))
+
+
+def markdown_result(result, hidden=()):
+    sections = [f"<!-- Page {page['page_number']} -->\n\n{render_tables(page_markdown(page, hidden)).rstrip()}"
                 for page in result["pages"]]
     markdown = "\n\n---\n\n".join(sections)
     if result["status"] != "complete":
