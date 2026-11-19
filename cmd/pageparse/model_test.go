@@ -170,6 +170,18 @@ func TestBrowseButtonAlignsWithSource(t *testing.T) {
 	}
 }
 
+func TestExportNameHasSpaceAfterLabel(t *testing.T) {
+	m := newModel(nil, "parse")
+	if !strings.Contains(ansi.Strip(m.View().Content), "Export as  Original name") {
+		t.Fatal("expected space between the export label and its placeholder")
+	}
+	m.setFocus(exportName)
+	m.inputs[exportName].SetValue("notes.md")
+	if !strings.Contains(ansi.Strip(m.View().Content), "Export as  notes.md") {
+		t.Fatal("expected space between the export label and the typed filename")
+	}
+}
+
 func TestHelpOpensScrollsAndRestoresPreviousScreen(t *testing.T) {
 	m := newModel(nil, "parse")
 	m.Update(tea.WindowSizeMsg{Width: 110, Height: 16})

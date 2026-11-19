@@ -127,7 +127,7 @@ func newModel(b *backend, workspace string) *model {
 	}
 	m.preview.SoftWrap, m.transcript.SoftWrap, m.details.SoftWrap = true, true, true
 	for field, hint := range map[control]string{source: "Path to PDF or image", pages: "all or 1,3-5",
-		destination: "outputs/", exportName: "Same as source"} {
+		destination: "outputs/", exportName: "Original name"} {
 		input := textinput.New()
 		input.Prompt, input.Placeholder = "", hint
 		input.CharLimit = 4096

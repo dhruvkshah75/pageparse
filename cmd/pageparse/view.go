@@ -22,7 +22,7 @@ const (
 	onCoralHex      = "#141413"
 	hairlineHex     = "#4b443d"
 	amberHex        = "#e8a55a"
-	formLabel       = 9
+	formLabel       = 11
 	formIndent      = 2 + formLabel
 	parseFormHeight = 12
 )
