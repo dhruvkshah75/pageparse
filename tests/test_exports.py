@@ -73,19 +73,27 @@ def test_restart_partial_and_format_specific_deletion(setup):
     assert (dest / "neighbor.md").read_bytes() == b"neighbor"
 
 
-def test_collision_after_confirmation(setup):
+@pytest.mark.parametrize("name, stem", [("", "report"), ("My notes.MD", "My notes")])
+def test_collision_after_confirmation(setup, name, stem):
     store, dest = setup
     doc = result("cancelled")
-    first = store.plan(doc, dest)
+    first = store.plan(doc, dest, name=name)
     first.paths[1].write_text("external")
-    (dest / "report.partial-2.md").symlink_to("absent")
+    (dest / f"{stem}.partial-2.md").symlink_to("absent")
     collision = store.publish(doc, first)
     assert collision.status == "collision"
-    assert [p.name for p in collision.proposal.paths] == ["report.partial-3.md", "report.partial-3.json"]
+    assert [p.name for p in collision.proposal.paths] == [f"{stem}.partial-3.md", f"{stem}.partial-3.json"]
     assert not first.paths[0].exists()
     assert first.paths[1].read_text() == "external"
     assert store.list() == []
     assert store.publish(doc, collision.proposal).status == "saved"
+
+
+@pytest.mark.parametrize("name", ["../other", "/tmp/file", "sub\\file", ".", "..", ".md", "a\x00b"])
+def test_reject_invalid_export_names(setup, name):
+    store, dest = setup
+    with pytest.raises(ExportError):
+        store.plan(result(), dest, name=name)
 
 
 def test_unsupported_publication_leaves_no_outputs(setup, monkeypatch):

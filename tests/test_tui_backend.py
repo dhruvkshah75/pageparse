@@ -246,8 +246,9 @@ def test_markdown_filters_keep_json_and_use_confirmed_selection(tmp_path):
             assert json.loads((output / "example.partial.json").read_text()) == session.result
 
             session.result["status"] = "complete"
-            await request(session, "export", destination="", format="md", hidden_elements=["Footnote"])
-            markdown = (output / "example.md").read_text()
+            await request(session, "export", destination="", format="md", name="Clean notes.md",
+                          hidden_elements=["Footnote"])
+            markdown = (output / "Clean notes.md").read_text()
             assert "Saved footnote" not in markdown and "Remove this footer" in markdown
             assert markdown.count("Shared words") == 2
         finally:

@@ -24,7 +24,7 @@ const (
 	amberHex        = "#e8a55a"
 	formLabel       = 9
 	formIndent      = 2 + formLabel
-	parseFormHeight = 11
+	parseFormHeight = 12
 )
 
 var (
@@ -53,6 +53,9 @@ func (m *model) layout() layout {
 	l := layout{width: width, height: max(1, m.height-5), form: width, viewer: width}
 	l.split = m.width >= 80
 	l.short = l.height < 15
+	if m.workspace == "parse" {
+		l.short = l.height < parseFormHeight+4
+	}
 	if l.split {
 		l.form = min(46, width*43/100)
 		l.viewer = width - l.form - 2
@@ -62,7 +65,7 @@ func (m *model) layout() layout {
 
 func (m *model) resize() {
 	l := m.layout()
-	for _, field := range []control{source, pages, destination} {
+	for _, field := range []control{source, pages, destination, exportName} {
 		m.inputs[field].SetWidth(max(1, l.form-formIndent-1))
 	}
 	m.preview.SetWidth(max(1, l.viewer-4))
@@ -230,7 +233,7 @@ func (m *model) connectionLine(width int) string {
 
 func (m *model) keyHint() string {
 	switch m.focus {
-	case source, pages, destination:
+	case source, pages, destination, exportName:
 		if m.width >= 63 {
 			return "↑↓ Move  Tab Next  F5 Parse  F8 Paste image  F9 Copy"
 		}
@@ -331,6 +334,7 @@ func (m *model) formView(width, height int, area hitArea) string {
 		row(pages, m.input(pages, "Pages", width)),
 		row(destination, m.input(destination, "Output", width)),
 		row(format, "  "+lipMuted.Render(fmt.Sprintf("%-*s", formLabel, "Format"))+m.button(format, choiceLabel(outputFormats, m.format)+" ▾", false)),
+		row(exportName, m.input(exportName, "Export as", width)),
 		row(passMode, "  "+lipMuted.Render(fmt.Sprintf("%-*s", formLabel, "Pass mode"))+m.button(passMode, passLabel+" ▾", false)),
 		row(mdFilters, "  "+lipMuted.Render(fmt.Sprintf("%-*s", formLabel, "Filters"))+m.button(mdFilters, filterLabel+" ▾", false)),
 		{},

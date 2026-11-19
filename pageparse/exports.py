@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+from unicodedata import category
 from time import monotonic, sleep, time
 from uuid import uuid4
 
@@ -68,6 +69,7 @@ class Proposal:
     identity: tuple[int, int]
     paths: tuple[Path, ...]
     trusted: bool
+    stem: str
 
     @property
     def formats(self):
@@ -211,31 +213,40 @@ class ExportStore:
             if lock is not None:
                 os.close(lock)
 
-    def plan(self, result, destination: Path, formats=FORMATS):
+    def plan(self, result, destination: Path, formats=FORMATS, name=""):
         if not result["pages"] or result["status"] not in ("complete", "failed", "cancelled"):
             raise ExportError("Generate at least one page before exporting.")
         requested = set(formats)
         if not requested or not requested.issubset(FORMATS):
             raise ExportError("Choose Markdown, JSON, or both.")
         formats = tuple(fmt for fmt in FORMATS if fmt in requested)
+        if not isinstance(name, str) or any(char in "/\\" or category(char) == "Cc" for char in name):
+            raise ExportError("Enter a filename in Export as. Use Output for the directory.")
+        stem = name.strip()
+        if stem:
+            if stem.lower().endswith((".md", ".json")):
+                stem = stem.rsplit(".", 1)[0].rstrip()
+            if stem in ("", ".", ".."):
+                raise ExportError("Enter a name before the file extension.")
+        else:
+            stem = Path(result["source_name"]).stem
+        if result["status"] != "complete":
+            stem += ".partial"
         parent = Path(os.path.abspath(destination))
         try:
             with self.locked() as db, directory(parent) as fd:
-                return self.candidate(db, fd, parent, result, formats)
+                return self.candidate(db, fd, parent, stem, formats)
         except OSError:
             raise ExportError("Choose an accessible output directory without symlink components.") from None
 
-    def candidate(self, db, fd, parent, result, formats):
-        stem = Path(result["source_name"]).stem
-        if result["status"] != "complete":
-            stem += ".partial"
+    def candidate(self, db, fd, parent, stem, formats):
         suffix = 1
         while True:
             name = stem if suffix == 1 else f"{stem}-{suffix}"
             paths = tuple(parent / f"{name}.{fmt}" for fmt in formats)
             if all(self.available(db, fd, path) for path in paths):
                 info = os.fstat(fd)
-                return Proposal(parent, identity(info), paths, trusted_directory(info))
+                return Proposal(parent, identity(info), paths, trusted_directory(info), stem)
             suffix += 1
 
     @staticmethod
@@ -256,10 +267,10 @@ class ExportStore:
             with self.locked() as db, directory(proposal.parent) as fd:
                 current = os.fstat(fd)
                 if identity(current) != proposal.identity or trusted_directory(current) != proposal.trusted:
-                    return Publication("collision", proposal=self.candidate(db, fd, proposal.parent, result, proposal.formats),
+                    return Publication("collision", proposal=self.candidate(db, fd, proposal.parent, proposal.stem, proposal.formats),
                                        message="The destination changed. Review the proposed paths again.")
                 if not all(self.available(db, fd, path) for path in proposal.paths):
-                    return Publication("collision", proposal=self.candidate(db, fd, proposal.parent, result, proposal.formats),
+                    return Publication("collision", proposal=self.candidate(db, fd, proposal.parent, proposal.stem, proposal.formats),
                                        message="An output path became occupied. Review the new paths.")
                 return self.write_files(db, fd, result, proposal, markdown)
         except OSError:
@@ -302,7 +313,7 @@ class ExportStore:
                     verify(fd, row["final"], (row["stage_dev"], row["stage_ino"]), row, remove=True)
             state, paths, staging = self.resolve(db, fd, group_id)
             if collision and not paths and not staging:
-                return Publication("collision", proposal=self.candidate(db, fd, proposal.parent, result, proposal.formats),
+                return Publication("collision", proposal=self.candidate(db, fd, proposal.parent, proposal.stem, proposal.formats),
                                    message="An output path became occupied. Review the new paths.")
             return Publication("incomplete" if paths or staging else "error", paths, staging,
                                message="Could not publish the selected files safely. Check the destination and retry.")

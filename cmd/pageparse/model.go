@@ -22,6 +22,7 @@ const (
 	pages         control = "pages"
 	destination   control = "destination"
 	format        control = "format"
+	exportName    control = "export name"
 	passMode      control = "pass mode"
 	mdFilters     control = "markdown filters"
 	parseStart    control = "parse start"
@@ -44,7 +45,7 @@ const (
 var workspacesByKey = map[string]string{"f1": "parse", "f2": "chat", "f3": "exports"}
 
 var workspaceControls = map[string][]control{
-	"parse":   {source, browse, pages, destination, format, passMode, mdFilters, parseStart, parseStop, export, previewMode, preview},
+	"parse":   {source, browse, pages, destination, format, exportName, passMode, mdFilters, parseStart, parseStop, export, previewMode, preview},
 	"chat":    {chatModel, newChat, transcript, prompt, send, chatStop},
 	"exports": {exportList, exportDetails, deleteFiles},
 }
@@ -125,7 +126,8 @@ func newModel(b *backend, workspace string) *model {
 		prompt: textarea.New(),
 	}
 	m.preview.SoftWrap, m.transcript.SoftWrap, m.details.SoftWrap = true, true, true
-	for field, hint := range map[control]string{source: "Path to PDF or image", pages: "all or 1,3-5", destination: "outputs/"} {
+	for field, hint := range map[control]string{source: "Path to PDF or image", pages: "all or 1,3-5",
+		destination: "outputs/", exportName: "Same as source"} {
 		input := textinput.New()
 		input.Prompt, input.Placeholder = "", hint
 		input.CharLimit = 4096
@@ -470,7 +472,7 @@ func (m *model) handleKey(key tea.KeyPressMsg) tea.Cmd {
 			m.openMenu(mdFilters, "Hide in Markdown export", markdownFilters, "")
 		}
 	case "f8", "ctrl+v":
-		if name == "ctrl+v" && (m.workspace != "parse" || m.focus == pages || m.focus == destination) {
+		if name == "ctrl+v" && (m.workspace != "parse" || m.inputs[m.focus] != nil && m.focus != source) {
 			return m.updateWidget(key)
 		}
 		if m.workspace == "parse" && !m.pasting && m.offline == "" {
@@ -529,7 +531,7 @@ func parseArrowFocus(current control, key string) control {
 	controls := workspaceControls["parse"]
 	index := slices.Index(controls, current)
 	switch current {
-	case source, browse, pages, destination, format, passMode, mdFilters:
+	case source, browse, pages, destination, format, exportName, passMode, mdFilters:
 		if key == "down" {
 			return controls[index+1]
 		}
@@ -671,7 +673,7 @@ func (m *model) startExport() {
 			}
 		}
 		m.submit(request{"op": "export", "format": m.format, "destination": m.inputs[destination].Value(),
-			"hidden_elements": hidden})
+			"name": m.inputs[exportName].Value(), "hidden_elements": hidden})
 	}
 }
 

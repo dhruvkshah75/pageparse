@@ -101,6 +101,8 @@ The TUI uses a warm charcoal palette with coral controls and cream text.
 
 **Export.** Choose Markdown, JSON, or both beside the output directory. The default destination is `outputs/` in the launch directory. Markdown uses pipe tables, and JSON preserves the original table spans and pixel coordinates. Partial results require confirmation and use `.partial` filenames. The app never overwrites an existing path.
 
+Use **Export as** to set a custom filename. Leave it blank to use the source name. When exporting both formats, they share the same name with their respective extensions.
+
 Open **Filters** or press **Alt+M** in Parse. Use **Space** to toggle **Page header**, **Page footer**, and **Footnote**, then press **Esc** to return. Filters apply to the Markdown file when you export. The preview and JSON retain all parsed blocks.
 
 **Clean up.** Open Exports and press **Space** to select groups. Choose which files to delete and confirm their paths. Exports refreshes after deletion and checks for external deletions while the tab is open. Cleanup verifies the files it created and requires a directory owned by you without group or other write access. For an existing group-writable `outputs/`, run `chmod go-w outputs` from the checkout.

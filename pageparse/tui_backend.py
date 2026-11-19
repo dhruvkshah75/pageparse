@@ -188,7 +188,7 @@ class BackendSession:
             if not isinstance(hidden, list) or any(value not in MARKDOWN_FILTERS for value in hidden):
                 raise ExportError("Choose supported Markdown element filters.")
             hidden = tuple(value for value in MARKDOWN_FILTERS if value in hidden and "md" in formats)
-            proposal = await run_sync(self.store.plan, result, destination, formats)
+            proposal = await run_sync(self.store.plan, result, destination, formats, request.get("name", ""))
             if result["status"] != "complete" or not proposal.trusted:
                 self.confirm_export(result, proposal, hidden)
                 return
